@@ -1,0 +1,3 @@
+[console_scripts]
+icn-fetch = rns_icn.cli_fetch:main
+icn-publish = rns_icn.cli_publish:main

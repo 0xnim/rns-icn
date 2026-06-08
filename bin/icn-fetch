@@ -1,0 +1,16 @@
+#!/usr/bin/env python3
+"""icn-fetch — Fetch content from an ICN content server over RNS Links.
+
+Standalone wrapper that delegates to the rns_icn library module.
+Also works when installed via `pip install -e .` as the `icn-fetch` console script.
+"""
+
+import sys
+import os
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+from rns_icn.cli_fetch import main
+
+if __name__ == "__main__":
+    main()
