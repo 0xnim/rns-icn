@@ -53,7 +53,7 @@ from .aps import APSManager
 # from .propagation import PropagationManager, PropagationError  # TODO: uncomment when propagation module exists
 from .forwarder import Forwarder
 from .server import ICNServer, ServerRole
-from .rns_server import RNSICNServer
+from .rns_server import ICNServer as RNSICNServer
 from .peer_discovery import PeerDiscoveryManager, PeerInfo
 from .rns_utils import (
     load_or_create_identity,

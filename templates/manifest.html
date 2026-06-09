@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Manifest: {{ peer_hash }}</title>
+    <style>
+        body { font-family: monospace; max-width: 900px; margin: 2rem auto; padding: 0 1rem; background: #1a1a2e; color: #eaeaea; }
+        h1 { color: #00d9ff; border-bottom: 1px solid #00d9ff33; padding-bottom: 0.5rem; }
+        .back { display: inline-block; margin-bottom: 1rem; color: #00d9ff; text-decoration: none; }
+        .back:hover { text-decoration: underline; }
+        .peer-info { background: #16213e; padding: 1rem; border-radius: 4px; margin-bottom: 1rem; }
+        .hash { font-family: monospace; color: #888; }
+        .entries { list-style: none; padding: 0; }
+        .entry { background: #16213e; border: 1px solid #00d9ff22; border-radius: 4px; padding: 1rem; margin: 0.5rem 0; display: flex; justify-content: space-between; align-items: center; }
+        .entry:hover { border-color: #00d9ff55; }
+        .entry-info { flex: 1; }
+        .entry-name { color: #00d9ff; font-weight: bold; }
+        .entry-meta { color: #888; font-size: 0.85rem; margin-top: 0.25rem; }
+        .entry-kind { background: #0f3460; padding: 0.2rem 0.5rem; border-radius: 3px; font-size: 0.75rem; }
+        .btn-download { background: #ff6b6b; color: white; padding: 0.4rem 1rem; border-radius: 3px; text-decoration: none; font-size: 0.85rem; }
+        .btn-download:hover { background: #ee5a5a; }
+    </style>
+</head>
+<body>
+    <a href="/" class="back">&#x2190; Back to Browser</a>
+    <h1>&#x1F4C4; Manifest</h1>
+    <div class="peer-info">
+        <strong>Peer:</strong> <span class="hash">{{ peer_hash }}</span>
+    </div>
+
+    <ul class="entries">
+        {% for entry in manifest.entries %}
+        <li class="entry">
+            <div class="entry-info">
+                <div class="entry-name">{{ entry.label or entry.name }}</div>
+                <div class="entry-meta">{{ entry.name }} &#x2022; {{ entry.size or '?' }} bytes</div>
+            </div>
+            <span class="entry-kind">{{ entry.kind or 'blob' }}</span>
+            <a href="/download/{{ peer_hash }}/{{ entry.label or entry.name | urlencode }}" class="btn-download">Download</a>
+        </li>
+        {% else %}
+        <li class="entry" style="justify-content: center; color: #888;">No entries found</li>
+        {% endfor %}
+    </ul>
+</body>
+</html>

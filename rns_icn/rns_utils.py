@@ -33,6 +33,24 @@ def load_or_create_identity(path: str) -> RNS.Identity:
     return identity
 
 
+def load_transport_identity() -> Optional[RNS.Identity]:
+    """Try to load the RNS transport identity from the shared instance storage.
+
+    Returns the transport identity if running under a shared rnsd instance,
+    otherwise returns None.
+    """
+    try:
+        import os
+        ti_path = os.path.join(RNS.Reticulum.storagepath, "transport_identity")
+        if os.path.exists(ti_path):
+            ident = RNS.Identity.from_file(ti_path)
+            if ident:
+                return ident
+    except Exception:
+        pass
+    return None
+
+
 def default_identity_path(app_name: str = "icn") -> str:
     """Return the default path for an identity file.
 

@@ -1,6 +1,5 @@
-"""RNSICNServer — ICN server on the Reticulum mesh.
+"""RNSICNServer — ICN server on the Reticulum mesh (renamed to ICNServer).
 
-Wires the ICN Forwarder into RNS Destinations and Links.
 Like an LXMF Propagation Node but for ICN content:
 - Listens on an RNS Destination for incoming Links
 - Each incoming Link becomes a LinkFace
@@ -17,6 +16,8 @@ from typing import Optional
 
 import RNS
 
+from .config import ServerConfig
+from .link_pool import LinkPool
 from .face import FaceId, LinkFace
 from .manifest import EntryKind, Manifest, ManifestEntry
 from .name import Name
@@ -39,47 +40,65 @@ from .resource_transport import (
     ResourceTransportError,
 )
 from .rns_utils import load_or_create_identity
-from .server import ICNServer, ServerRole
+from .server import ICNServer as BaseICNServer, ServerRole
 
 
-class RNSICNServer(ICNServer):
+class ICNServer(BaseICNServer):
     """ICN Server integrated with RNS networking.
 
     Creates a RNS Destination for the 'icn' application,
     accepts incoming Links as Faces, and can establish
     outbound Links to known peers.
+
+    Accepts ServerConfig for configuration and uses LinkPool
+    for consistent link management.
     """
 
     def __init__(
         self,
-        identity: Optional[RNS.Identity] = None,
-        identity_path: Optional[str] = None,
-        app_name: str = "icn",
-        aspect: str = "default",
-        cs_max: int = 10000,
+        config: ServerConfig,
+        link_pool: Optional[LinkPool] = None,
     ):
-        if identity_path is not None:
-            identity = load_or_create_identity(identity_path)
-        self.identity = identity or RNS.Identity()
-        self.app_name = app_name
-        self.aspect = aspect
+        # Load identity from config
+        identity = load_or_create_identity(config.identity_path)
+
+        self.config = config
+        self.identity = identity
+        self.app_name = config.app_name
+        self.aspect = config.aspect
 
         # Base ICNServer uses the 16-byte RNS address
-        super().__init__(self.identity.hash, cs_max=cs_max)
+        super().__init__(self.identity.hash, cs_max=config.cs_max_entries, role=config.role)
 
-        # Created lazily in start()
+        # Replace in-memory ContentStore with SQLite-backed persistent store
+        from .content_store import ContentStore as SQLiteContentStore
+        self.forwarder.cs = SQLiteContentStore(
+            path=config.cs_path,
+            max_entries=config.cs_max_entries,
+            default_ttl=config.cs_ttl_seconds,
+            prefix_ttls=config.cs_prefix_ttls,
+        )
+
+        # Destination created in start()
         self.destination: Optional[RNS.Destination] = None
 
-        self._links: dict[FaceId, RNS.Link] = {}
+        # Use shared LinkPool or create one
+        self._link_pool = link_pool or LinkPool(
+            identity=self.identity,
+            app_name=self.app_name,
+            aspect=self.aspect,
+            known_peers=config.known_peers,
+        )
+
         self._loop: Optional[asyncio.AbstractEventLoop] = None
 
-        # Resource transport (for large chunks > threshold)
+        # Resource transport
         self._resource_listener: Optional[ResourceListener] = None
-        self._resource_threshold: int = DEFAULT_RESOURCE_THRESHOLD
+        self._resource_threshold: int = config.resource_threshold
 
         # Announce management
         self._announce_task: Optional[asyncio.Task] = None
-        self._announce_interval: float = 300  # seconds between re-announces
+        self._announce_interval: float = config.announce_interval
 
         # Peer discovery
         self.discovery: PeerDiscoveryManager = PeerDiscoveryManager(self)
@@ -87,13 +106,31 @@ class RNSICNServer(ICNServer):
         # Compute feature bitmask for capability exchange
         self._features: int = self._compute_features()
 
+        # Track if we started RNS (to stop on shutdown)
+        self._started_rns = False
+
     def _icn_app_data(self) -> bytes:
         """Build announce app_data with server role encoded."""
         return b"icn" + bytes([self.role.value])
 
-    def start(self) -> None:
-        """Start the server. Must be called from an async context with RNS initialized."""
+    async def __aenter__(self) -> "ICNServer":
+        await self.start()
+        return self
+
+    async def __aexit__(self, *exc) -> None:
+        await self.shutdown()
+
+    async def start(self) -> None:
+        """Start the server. Must be called from an async context."""
+        if self._loop is not None:
+            return  # Already started
+
         self._loop = asyncio.get_running_loop()
+
+        # Initialize RNS if not already started
+        if not hasattr(RNS, "Reticulum") or RNS.Reticulum is None:
+            RNS.Reticulum()
+            self._started_rns = True
 
         # Create the destination that clients connect to
         self.destination = RNS.Destination(
@@ -104,6 +141,12 @@ class RNSICNServer(ICNServer):
             self.aspect,
         )
         self.destination.set_link_established_callback(self._on_incoming_link)
+
+        # Start link pool (handles outbound links)
+        await self._link_pool.start()
+
+        # Inject known peers into announce table
+        await self._inject_known_peers()
 
         # Force immediate announce so peers discover us via transport table
         self.destination.announce(app_data=self._icn_app_data())
@@ -119,7 +162,7 @@ class RNSICNServer(ICNServer):
         RNS.log(f"ICN Destination: {self.destination.hexhash}")
         RNS.log(f"Listening on /{self.app_name}/{self.aspect}")
 
-    def stop(self) -> None:
+    async def shutdown(self) -> None:
         """Stop the server, tear down all links and cancel announce loop."""
         # Stop peer discovery
         self.discovery.stop()
@@ -127,36 +170,30 @@ class RNSICNServer(ICNServer):
         # Cancel periodic announce loop
         if self._announce_task is not None:
             self._announce_task.cancel()
+            try:
+                await self._announce_task
+            except asyncio.CancelledError:
+                pass
             self._announce_task = None
 
-        for fid, link in list(self._links.items()):
-            try:
-                link.teardown()
-            except Exception:
-                pass
-        self._links.clear()
+        # Stop link pool (tears down all links)
+        await self._link_pool.stop()
+
+        # Stop RNS if we started it
+        if self._started_rns and hasattr(RNS, "Reticulum") and RNS.Reticulum:
+            RNS.Reticulum().exit()
+
+        self._loop = None
 
     def announce(self, app_data: Optional[bytes] = None) -> None:
-        """Force an announce of this server's destination.
-
-        Broadcasts the destination over the mesh so peers can discover
-        us via the RNS transport table. The announce includes optional
-        application-specific data (default: b'icn').
-
-        Args:
-            app_data: Optional bytes to include in the announce.
-        """
+        """Force an announce of this server's destination."""
         if self.destination is None:
             raise RuntimeError("Server not started. Call start() first.")
         self.destination.announce(app_data=app_data or self._icn_app_data())
         RNS.log(f"ICN: Announced destination {self.destination.hexhash}")
 
     async def _announce_loop(self) -> None:
-        """Periodically re-announce the destination to keep transport table fresh.
-
-        RNS transport entries eventually expire; periodic re-announcement
-        ensures peers can still route to us. Runs at self._announce_interval.
-        """
+        """Periodically re-announce the destination to keep transport table fresh."""
         try:
             while True:
                 await asyncio.sleep(self._announce_interval)
@@ -167,11 +204,26 @@ class RNSICNServer(ICNServer):
         except asyncio.CancelledError:
             pass
 
+    async def _inject_known_peers(self) -> None:
+        """Load all configured known_peers into RNS.Transport.announce_table."""
+        for peer_hash, peer_config in self._link_pool.known_peers.items():
+            if peer_config.identity_path:
+                identity = RNS.Identity.from_file(peer_config.identity_path)
+                if identity:
+                    dest = RNS.Destination(
+                        identity,
+                        RNS.Destination.IN,
+                        RNS.Destination.SINGLE,
+                        self.app_name,
+                        self.aspect,
+                    )
+                    RNS.Transport.announce_table[bytes.fromhex(peer_hash)] = dest
+                    RNS.log(f"ICN: Injected known peer {peer_config.name} ({peer_hash[:16]}) into announce table")
+
     def _on_incoming_link(self, link: RNS.Link) -> None:
         """Called when a remote peer establishes a Link."""
         face = self._new_face()
         self._make_link_face(face.id(), link)
-        self._links[face.id()] = link
 
         peer_hash = link.hash.hex()  # RNS v1.2.8: Link has .hash (bytes), not .hexhash
         link_id_str = peer_hash[:16]
@@ -189,7 +241,7 @@ class RNSICNServer(ICNServer):
             )
 
     async def connect(self, peer_hash: str) -> Optional[FaceId]:
-        """Establish an outbound Link to a peer ICN server.
+        """Establish an outbound Link to a peer ICN server using LinkPool.
 
         Args:
             peer_hash: RNS destination hex hash
@@ -199,29 +251,16 @@ class RNSICNServer(ICNServer):
         if self._loop is None or self.destination is None:
             raise RuntimeError("Server not started. Call start() first.")
 
-        dest = RNS.Destination(
-            self.identity, RNS.Destination.OUT, RNS.Destination.SINGLE,
-            self.app_name, self.aspect,
-        )
-        # Override the computed hash with the peer's destination hash
-        dest.hash = bytes.fromhex(peer_hash)
-        dest.hexhash = peer_hash
+        peer_hash_bytes = bytes.fromhex(peer_hash)
 
-        link = RNS.Link(dest)
-        timeout = 120.0
-        start_time = asyncio.get_event_loop().time()
-        while link.status != RNS.Link.ACTIVE:
-            if link.status in (RNS.Link.CLOSED,):
-                RNS.log(f"ICN: Link failed (reason: {link.teardown_reason})")
-                return None
-            await asyncio.sleep(0.1)
-            if asyncio.get_event_loop().time() - start_time > timeout:
-                RNS.log("ICN: Link establishment timed out")
-                return None
+        # Use LinkPool to get or create link
+        link = await self._link_pool.get_link(peer_hash_bytes)
+        if not link:
+            RNS.log(f"ICN: Failed to establish link to {peer_hash}")
+            return None
 
         face = self._new_face()
         self._make_link_face(face.id(), link)
-        self._links[face.id()] = link
 
         # Register in discovery and send capabilities
         self.discovery.update_peer_face(peer_hash, face.id())
@@ -324,11 +363,7 @@ class RNSICNServer(ICNServer):
     # ── Capability exchange ──
 
     def _compute_features(self) -> int:
-        """Build the feature bitmask for capability exchange.
-
-        Returns a 32-bit integer where each bit represents a supported
-        feature that this server instance can provide.
-        """
+        """Build the feature bitmask for capability exchange."""
         features = 0
         # APS push subscriptions
         features |= FEATURE_APS
@@ -351,11 +386,7 @@ class RNSICNServer(ICNServer):
         return features
 
     async def _send_capabilities(self, face_id: FaceId, peer_hash: str) -> None:
-        """Send our CapPeer to a peer on the given face.
-
-        Called immediately after link establishment (both incoming and
-        outgoing) so the peer learns our role, version, and features.
-        """
+        """Send our CapPeer to a peer on the given face."""
         cap = CapPeer(
             version=1,
             role=self.role.value,
@@ -370,11 +401,7 @@ class RNSICNServer(ICNServer):
                 RNS.log(f"ICN: Failed to send capabilities to peer {peer_hash[:16]}: {e}")
 
     def _on_cap_peer(self, cap: CapPeer, face_id: FaceId, peer_hash: str) -> None:
-        """Handle incoming capabilities from a peer.
-
-        Stores the peer's capabilities in the discovery registry and
-        logs the peer's role and features.
-        """
+        """Handle incoming capabilities from a peer."""
         self.discovery.update_peer_capabilities(peer_hash, cap)
         role_names = ["ORIGIN", "CACHE", "PROPAGATION"]
         role_name = role_names[cap.role] if 0 <= cap.role < len(role_names) else f"UNKNOWN({cap.role})"
@@ -410,17 +437,7 @@ class RNSICNServer(ICNServer):
         RNS.log(f"ICN: Received Data via Resource: {data.name} ({len(data.content)} bytes)")
 
     def create_resource_publisher(self, link: RNS.Link) -> ResourcePublisher:
-        """Create a ResourcePublisher for sending large Data over a Link.
-
-        Use this when you need to send a Data packet that exceeds the
-        configured threshold and should use RNS.Resource transport.
-
-        Args:
-            link: An established RNS.Link to send over.
-
-        Returns:
-            A ResourcePublisher bound to the link.
-        """
+        """Create a ResourcePublisher for sending large Data over a Link."""
         return ResourcePublisher(link)
 
     def create_large_content_publisher(
@@ -428,18 +445,7 @@ class RNSICNServer(ICNServer):
         link: RNS.Link,
         threshold: Optional[int] = None,
     ) -> LargeContentPublisher:
-        """Create a LargeContentPublisher for chunked content.
-
-        Automatically uses RNS.Resource for Data packets whose serialised
-        size exceeds *threshold* (defaults to *resource_threshold*).
-
-        Args:
-            link: An established RNS.Link.
-            threshold: Size threshold in bytes (default: 100 KB).
-
-        Returns:
-            A LargeContentPublisher bound to the link.
-        """
+        """Create a LargeContentPublisher for chunked content."""
         return LargeContentPublisher(
             link,
             resource_threshold=threshold or self._resource_threshold,
@@ -457,5 +463,9 @@ class RNSICNServer(ICNServer):
     def rns_identity(self) -> RNS.Identity:
         return self.identity
 
+    @property
+    def link_pool(self) -> LinkPool:
+        return self._link_pool
+
     def __str__(self) -> str:
-        return f"RNSICNServer({self.identity})"
+        return f"ICNServer({self.identity})"

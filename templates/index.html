@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>ICN Browser</title>
+    <style>
+        body { font-family: monospace; max-width: 900px; margin: 2rem auto; padding: 0 1rem; background: #1a1a2e; color: #eaeaea; }
+        h1 { color: #00d9ff; border-bottom: 1px solid #00d9ff33; padding-bottom: 0.5rem; }
+        .toolbar { display: flex; gap: 0.5rem; margin: 1rem 0; align-items: center; }
+        .status { padding: 0.5rem 1rem; background: #0f3460; border-radius: 4px; color: #00d9ff; font-size: 0.85rem; }
+        .status.refreshing { background: #60400f; color: #ffb700; }
+        .entries { list-style: none; padding: 0; }
+        .entry { background: #16213e; border: 1px solid #00d9ff22; border-radius: 4px; padding: 1rem; margin: 0.5rem 0; display: flex; justify-content: space-between; align-items: center; }
+        .entry:hover { border-color: #00d9ff55; }
+        .entry-info { flex: 1; }
+        .entry-name { color: #00d9ff; font-weight: bold; }
+        .entry-meta { color: #888; font-size: 0.85rem; margin-top: 0.25rem; }
+        .entry-kind { background: #0f3460; padding: 0.2rem 0.5rem; border-radius: 3px; font-size: 0.75rem; }
+        .btn-download { background: #ff6b6b; color: white; padding: 0.4rem 1rem; border-radius: 3px; text-decoration: none; font-size: 0.85rem; }
+        .btn-download:hover { background: #ee5a5a; }
+        .btn-refresh { background: #00d9ff; color: #1a1a2e; padding: 0.5rem 1rem; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; }
+        .btn-refresh:hover { background: #00b8dd; }
+        .btn-refresh:disabled { background: #555; cursor: not-allowed; }
+    </style>
+</head>
+<body>
+    <h1>🔍 ICN Browser</h1>
+    <p>Browse content on the ICN network over RNS mesh</p>
+
+    <div class="toolbar">
+        <button id="refreshBtn" class="btn-refresh" onclick="refresh()">Refresh Manifest</button>
+        <div id="status" class="status">{{ "Manifest loaded - {{ manifest.entries|length }} entries" if manifest.entries else "No manifest loaded" }}</div>
+    </div>
+
+    <ul class="entries" id="entries">
+        {% for entry in manifest.entries %}
+        <li class="entry">
+            <div class="entry-info">
+                <div class="entry-name">{{ entry.label }}</div>
+                <div class="entry-meta">{{ entry.name }} • {{ entry.size }} bytes</div>
+            </div>
+            <span class="entry-kind">{{ entry.kind }}</span>
+            <a href="/download/{{ entry.label }}" class="btn-download">Download</a>
+        </li>
+        {% else %}
+        <li class="entry" style="justify-content: center; color: #888;">No entries found</li>
+        {% endfor %}
+    </ul>
+
+    <script>
+        async function refresh() {
+            const btn = document.getElementById('refreshBtn');
+            const status = document.getElementById('status');
+            btn.disabled = true;
+            status.textContent = 'Refreshing manifest...';
+            status.className = 'status refreshing';
+
+            try {
+                const resp = await fetch('/api/refresh', { method: 'POST' });
+                const data = await resp.json();
+                
+                // Poll for completion
+                pollForManifest();
+            } catch (e) {
+                status.textContent = 'Error: ' + e.message;
+                status.className = 'status';
+                status.style.background = '#600f0f';
+                btn.disabled = false;
+            }
+        }
+
+        async function pollForManifest() {
+            const status = document.getElementById('status');
+            const btn = document.getElementById('refreshBtn');
+            
+            for (let i = 0; i < 30; i++) {
+                await new Promise(r => setTimeout(r, 3000));
+                try {
+                    const resp = await fetch('/api/manifest');
+                    const data = await resp.json();
+                    if (data.entries && data.entries.length > 0) {
+                        status.textContent = `Manifest loaded - ${data.entries.length} entries`;
+                        status.className = 'status';
+                        btn.disabled = false;
+                        location.reload();
+                        return;
+                    }
+                } catch (e) {}
+            }
+            
+            status.textContent = 'Refresh timed out';
+            status.className = 'status';
+            status.style.background = '#600f0f';
+            btn.disabled = false;
+        }
+    </script>
+</body>
+</html>

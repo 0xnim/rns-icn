@@ -1,0 +1,73 @@
+# ICN Configuration Example
+# Copy to icn.toml and customize
+
+[client]
+# Path to client identity file (will be created if doesn't exist)
+identity_path = "~/.icn/client_identity"
+
+# Mesh interfaces to use (RNS interface names)
+mesh_interfaces = ["UTN Oregon"]
+
+# Known ICN servers to connect to
+# destination_hash = 32-char hex RNS destination hash
+# identity_path = optional pre-shared identity file for announce injection
+[[client.known_peers]]
+name = "vps-prod"
+destination_hash = "24cb54c7ec86294f0723e1d04015b8aa"
+identity_path = "~/.icn/vps_identity"
+
+# Timeouts
+connect_timeout = 60.0
+fetch_timeout = 30.0
+path_request_timeout = 30.0
+
+# Retry configuration (exponential backoff)
+max_retries = 5
+base_retry_delay = 1.0
+max_retry_delay = 30.0
+
+# Logging
+log_level = "INFO"
+log_json = false
+
+[server]
+# Required: path to server identity file (must exist)
+identity_path = "/etc/rns-icn/identity"
+
+# RNS destination identity
+app_name = "icn"
+aspect = "default"
+
+# Mesh interfaces
+mesh_interfaces = ["UTN Oregon"]
+
+# Server role: ORIGIN, CACHE, or PROPAGATION
+role = "ORIGIN"
+
+# Announce settings
+announce_interval = 30.0
+reannounce_on_link = true
+
+# Content Store
+cs_max_entries = 10000
+cs_ttl_seconds = 0  # 0 = no TTL (infinite)
+cs_path = "~/.icn/content_store.db"
+cs_prefix_ttls = { "manifest" = 3600 }  # Per-prefix TTL overrides (seconds)
+
+# Resource transport (RNS.Resource for large content)
+resource_threshold = 100000  # bytes, ~100KB
+
+# Known peers for announce table injection (other ICN servers to peer with)
+[[server.known_peers]]
+name = "peer-1"
+destination_hash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+identity_path = "~/.icn/peer1_identity"
+
+# Logging
+log_level = "INFO"
+log_json = false
+
+# Optional HTTP API (for browser UI)
+http_enabled = false
+http_host = "127.0.0.1"
+http_port = 8080

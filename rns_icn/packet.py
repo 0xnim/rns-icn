@@ -301,6 +301,13 @@ class Data:
         self.metadata.freshness = Freshness(fresh=False, age_seconds=age_seconds)
         return self
 
+    def verify_content_hash(self) -> bool:
+        """Verify content matches metadata.content_hash."""
+        if self.metadata.content_hash is None:
+            return True  # No hash to verify
+        computed = hashlib.blake2b(self.content, digest_size=32).digest()
+        return computed == self.metadata.content_hash
+
     def signed_hash(self) -> bytes:
         h = hashlib.blake2b(digest_size=32)
         h.update(self.name.to_bytes())
