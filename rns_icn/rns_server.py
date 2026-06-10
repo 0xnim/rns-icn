@@ -42,7 +42,7 @@ from .resource_transport import (
 )
 from .rns_utils import load_or_create_identity
 from .server import ICNServer as BaseICNServer, ServerRole
-from .logging import setup_logging
+from .icn_logging import setup_logging
 from .metrics import metrics
 from .health import is_health_interest, handle_health_interest, setup_http_api
 
@@ -138,7 +138,13 @@ class ICNServer(BaseICNServer):
         self._started_at = time.time()
 
         # Initialize RNS if not already started
-        if not hasattr(RNS, "Reticulum") or RNS.Reticulum is None:
+        try:
+            reticulum = RNS.Reticulum()
+            if reticulum is None:
+                RNS.Reticulum()
+                self._started_rns = True
+        except Exception:
+            # RNS not initialized, create it
             RNS.Reticulum()
             self._started_rns = True
 
@@ -166,17 +172,28 @@ class ICNServer(BaseICNServer):
         self._announce_task = asyncio.ensure_future(self._announce_loop())
 
         # Start peer discovery
+        RNS.log("ICN: Starting peer discovery...")
         self.discovery.start(app_name=self.app_name, aspect=self.aspect)
+        RNS.log("ICN: Peer discovery started")
 
         # Start HTTP API if enabled
         if self.config.http_enabled:
-            self._http_runner = await setup_http_api(
-                self,
-                metrics,
-                self.config.http_host,
-                self.config.http_port,
-            )
-            RNS.log(f"ICN: HTTP API started on http://{self.config.http_host}:{self.config.http_port}")
+            RNS.log("ICN: Starting HTTP API...")
+            try:
+                from .health import setup_http_api
+                self._http_runner = await setup_http_api(
+                    self,
+                    metrics,
+                    self.config.http_host,
+                    self.config.http_port,
+                )
+                RNS.log(f"ICN: HTTP API started on http://{self.config.http_host}:{self.config.http_port}")
+            except Exception as e:
+                RNS.log(f"ICN: HTTP API startup failed: {e}")
+                import traceback
+                traceback.print_exc()
+        else:
+            RNS.log(f"ICN: HTTP API disabled (http_enabled={self.config.http_enabled})")
 
         RNS.log(f"ICN Server: {str(self.identity)}")
         RNS.log(f"ICN Destination: {self.destination.hexhash}")

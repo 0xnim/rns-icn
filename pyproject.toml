@@ -16,7 +16,7 @@ where = ["."]
 include = ["rns_icn*"]
 
 [project.scripts]
-icn-client = "rns_icn.cli:client_main"
-icn-server = "rns_icn.cli:server_main"
+icn-client = "rns_icn.cli:client_main_sync"
+icn-server = "rns_icn.cli:server_main_sync"
 icn-publish = "rns_icn.cli_publish:main"
 icn-fetch = "rns_icn.cli_fetch:main"

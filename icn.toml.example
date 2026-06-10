@@ -50,7 +50,7 @@ reannounce_on_link = true
 
 # Content Store
 cs_max_entries = 10000
-cs_ttl_seconds = 0  # 0 = no TTL (infinite)
+cs_ttl_seconds = 0  # <= 0 means no TTL (infinite); positive = seconds until expiry
 cs_path = "~/.icn/content_store.db"
 cs_prefix_ttls = { "manifest" = 3600 }  # Per-prefix TTL overrides (seconds)
 

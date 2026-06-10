@@ -112,6 +112,16 @@ async def server_main() -> int:
     return 0
 
 
+def client_main_sync() -> int:
+    """Synchronous wrapper for icn-client entry point."""
+    return asyncio.run(client_main())
+
+
+def server_main_sync() -> int:
+    """Synchronous wrapper for icn-server entry point."""
+    return asyncio.run(server_main())
+
+
 def main() -> int:
     """Entry point for both binaries."""
     if "icn-client" in sys.argv[0] or (len(sys.argv) > 0 and sys.argv[0].endswith("icn-client")):

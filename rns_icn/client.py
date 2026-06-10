@@ -17,7 +17,7 @@ from .face import LinkFace
 from .name import Name
 from .packet import Interest, Data
 from .manifest import Manifest, ManifestEntry
-from .logging import setup_logging
+from .icn_logging import setup_logging
 from .metrics import metrics
 
 
@@ -48,7 +48,23 @@ class ICNClient:
         setup_logging(self.config)
 
         # Initialize RNS if not already started
-        if not hasattr(RNS, "Reticulum") or RNS.Reticulum is None:
+        # Check if RNS is already running by trying to get the instance
+        reticulum_running = False
+        try:
+            reticulum = RNS.Reticulum()
+            if reticulum is not None:
+                reticulum_running = True
+                self._started_rns = False
+        except OSError as e:
+            if "already running" in str(e):
+                reticulum_running = True
+                self._started_rns = False
+            else:
+                raise
+        except Exception:
+            pass
+
+        if not reticulum_running:
             RNS.Reticulum()
             self._started_rns = True
 

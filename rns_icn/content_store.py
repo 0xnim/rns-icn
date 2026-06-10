@@ -148,7 +148,7 @@ class ContentStore:
         return self._default_ttl
 
     def _calculate_expires_at(self, inserted_at: int, ttl: Optional[int]) -> Optional[int]:
-        if ttl is None:
+        if ttl is None or ttl <= 0:
             return None
         return inserted_at + ttl
 
