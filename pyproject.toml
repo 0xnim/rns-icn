@@ -7,11 +7,16 @@ name = "rns-icn"
 version = "0.1.0"
 description = "Information-Centric Networking for reticulum-py"
 requires-python = ">=3.10"
+dependencies = [
+    "aiohttp>=3.9",
+]
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["rns_icn*"]
 
 [project.scripts]
+icn-client = "rns_icn.cli:client_main"
+icn-server = "rns_icn.cli:server_main"
 icn-publish = "rns_icn.cli_publish:main"
 icn-fetch = "rns_icn.cli_fetch:main"

@@ -138,3 +138,32 @@ class Name:
 
     def __repr__(self) -> str:
         return f"Name('{self}')"
+
+    @classmethod
+    def from_string(cls, s: str) -> Name:
+        """Parse name from string format: /<rns-hex>/<path>?hash=<hex>"""
+        if not s.startswith("/"):
+            raise NameError("Name string must start with /")
+        parts = s[1:].split("/")
+        if not parts:
+            raise NameError("Invalid name format")
+
+        # First component is RNS address (hex)
+        try:
+            rns_addr = bytes.fromhex(parts[0])
+        except ValueError:
+            raise NameError(f"Invalid RNS address hex: {parts[0]}")
+
+        # Remaining components
+        path = []
+        for p in parts[1:]:
+            # Check for hash suffix
+            if "?hash=" in p:
+                comp, hash_str = p.split("?hash=", 1)
+                path.append(comp.encode("utf-8"))
+                content_hash = bytes.fromhex(hash_str)
+                return cls(rns_addr, path, content_hash)
+            else:
+                path.append(p.encode("utf-8"))
+
+        return cls(rns_addr, path)

@@ -9,6 +9,7 @@ from typing import Dict, List, Optional
 import RNS
 
 from .config import KnownPeer
+from .metrics import metrics
 
 
 class LinkPool:
@@ -81,6 +82,8 @@ class LinkPool:
         if link:
             self._links[peer_hash] = link
             self._health[peer_hash] = time.time()
+            # Record link up
+            metrics.record_link_up(peer_hash.hex())
         return link
 
     async def _ensure_announce(self, peer_hash: bytes) -> None:
@@ -148,6 +151,8 @@ class LinkPool:
                         pass
                     del self._links[h]
                     del self._health[h]
+                    # Record link down
+                    metrics.record_link_down(h.hex())
 
     def get_link_status(self, peer_hash: bytes) -> Optional[str]:
         """Get status of a link if it exists."""

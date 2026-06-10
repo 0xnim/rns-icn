@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -16,6 +17,8 @@ from .face import LinkFace
 from .name import Name
 from .packet import Interest, Data
 from .manifest import Manifest, ManifestEntry
+from .logging import setup_logging
+from .metrics import metrics
 
 
 class ICNClient:
@@ -41,6 +44,9 @@ class ICNClient:
 
     async def start(self) -> "ICNClient":
         """Initialize RNS, identity, forwarder, and link pool."""
+        # Setup logging first
+        setup_logging(self.config)
+
         # Initialize RNS if not already started
         if not hasattr(RNS, "Reticulum") or RNS.Reticulum is None:
             RNS.Reticulum()
@@ -89,6 +95,7 @@ class ICNClient:
         max_delay = self.config.max_retry_delay
 
         last_error = None
+        fetch_start = time.time()
         for attempt in range(max_retries + 1):
             try:
                 link = await self._link_pool.get_link(peer_hash)
@@ -109,6 +116,9 @@ class ICNClient:
                 )
 
                 if result and result.verify_content_hash():
+                    # Record successful fetch latency
+                    fetch_latency = time.time() - fetch_start
+                    metrics.record_fetch(fetch_latency, success=True)
                     return result
                 elif result:
                     # Hash mismatch - treat as failure and retry
@@ -126,6 +136,8 @@ class ICNClient:
                 await asyncio.sleep(delay)
 
         # All retries exhausted
+        fetch_latency = time.time() - fetch_start
+        metrics.record_fetch(fetch_latency, success=False)
         if last_error:
             raise last_error
         return None

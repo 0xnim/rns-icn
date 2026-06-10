@@ -11,6 +11,7 @@ Like an LXMF Propagation Node but for ICN content:
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from typing import Optional
 
@@ -41,6 +42,9 @@ from .resource_transport import (
 )
 from .rns_utils import load_or_create_identity
 from .server import ICNServer as BaseICNServer, ServerRole
+from .logging import setup_logging
+from .metrics import metrics
+from .health import is_health_interest, handle_health_interest, setup_http_api
 
 
 class ICNServer(BaseICNServer):
@@ -127,6 +131,12 @@ class ICNServer(BaseICNServer):
 
         self._loop = asyncio.get_running_loop()
 
+        # Setup logging first
+        setup_logging(self.config)
+
+        # Track start time for uptime metrics
+        self._started_at = time.time()
+
         # Initialize RNS if not already started
         if not hasattr(RNS, "Reticulum") or RNS.Reticulum is None:
             RNS.Reticulum()
@@ -158,12 +168,27 @@ class ICNServer(BaseICNServer):
         # Start peer discovery
         self.discovery.start(app_name=self.app_name, aspect=self.aspect)
 
+        # Start HTTP API if enabled
+        if self.config.http_enabled:
+            self._http_runner = await setup_http_api(
+                self,
+                metrics,
+                self.config.http_host,
+                self.config.http_port,
+            )
+            RNS.log(f"ICN: HTTP API started on http://{self.config.http_host}:{self.config.http_port}")
+
         RNS.log(f"ICN Server: {str(self.identity)}")
         RNS.log(f"ICN Destination: {self.destination.hexhash}")
         RNS.log(f"Listening on /{self.app_name}/{self.aspect}")
 
     async def shutdown(self) -> None:
         """Stop the server, tear down all links and cancel announce loop."""
+        # Stop HTTP API if running
+        if hasattr(self, "_http_runner") and self._http_runner:
+            await self._http_runner.cleanup()
+            self._http_runner = None
+
         # Stop peer discovery
         self.discovery.stop()
 
@@ -425,6 +450,20 @@ class ICNServer(BaseICNServer):
                 peer_hash = f"face_{face_id}"
             self._on_cap_peer(pkt.cap_peer, face_id, peer_hash)
             return
+
+        # Handle health check Interest
+        if pkt.interest is not None and is_health_interest(pkt.interest.name):
+            health = await handle_health_interest(self, pkt.interest.name, face_id)
+            if health:
+                from .packet import Data
+                health_data = Data.new(
+                    name=pkt.interest.name,
+                    content=json.dumps(health).encode("utf-8"),
+                )
+                face = self._faces.get(face_id)
+                if face:
+                    await face.send_data(health_data)
+                return
 
         # Fall through to base class for standard packet types
         await super().handle_incoming(face_id, raw)
