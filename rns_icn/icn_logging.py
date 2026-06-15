@@ -37,7 +37,8 @@ def setup_logging(config: Union[ClientConfig, ServerConfig]) -> None:
     """Configure logging based on config."""
     level = getattr(logging, config.log_level.upper(), logging.INFO)
 
-    handler = logging.StreamHandler(sys.stdout)
+    # Logs go to stderr so stdout stays clean for content/data output.
+    handler = logging.StreamHandler(sys.stderr)
     if config.log_json:
         handler.setFormatter(JSONFormatter())
     else:

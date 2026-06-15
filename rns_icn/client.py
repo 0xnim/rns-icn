@@ -47,26 +47,13 @@ class ICNClient:
         # Setup logging first
         setup_logging(self.config)
 
-        # Initialize RNS if not already started
-        # Check if RNS is already running by trying to get the instance
-        reticulum_running = False
-        try:
-            reticulum = RNS.Reticulum()
-            if reticulum is not None:
-                reticulum_running = True
-                self._started_rns = False
-        except OSError as e:
-            if "already running" in str(e):
-                reticulum_running = True
-                self._started_rns = False
-            else:
-                raise
-        except Exception:
-            pass
-
-        if not reticulum_running:
+        # Initialize RNS only if not already running (it's a process-global
+        # singleton; calling RNS.Reticulum() when one exists raises).
+        if RNS.Reticulum.get_instance() is None:
             RNS.Reticulum()
             self._started_rns = True
+        else:
+            self._started_rns = False
 
         # Load or create identity
         if self.config.identity_path:
@@ -94,8 +81,8 @@ class ICNClient:
         """Gracefully stop link pool and RNS."""
         if self._link_pool:
             await self._link_pool.stop()
-        if self._started_rns and hasattr(RNS, "Reticulum") and RNS.Reticulum:
-            RNS.Reticulum().exit()
+        if self._started_rns and RNS.Reticulum.get_instance() is not None:
+            RNS.Reticulum.exit_handler()
 
     async def fetch(
         self,

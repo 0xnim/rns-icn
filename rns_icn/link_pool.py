@@ -74,10 +74,7 @@ class LinkPool:
                 del self._links[peer_hash]
                 self._health.pop(peer_hash, None)
 
-        # Ensure announce in table
-        await self._ensure_announce(peer_hash)
-
-        # Create new link
+        # Create new link (resolves identity + path internally)
         link = await self._create_link(peer_hash)
         if link:
             self._links[peer_hash] = link
@@ -86,56 +83,62 @@ class LinkPool:
             metrics.record_link_up(peer_hash.hex())
         return link
 
-    async def _ensure_announce(self, peer_hash: bytes) -> None:
-        """Ensure peer announce is in RNS transport table."""
-        if peer_hash in RNS.Transport.announce_table:
-            return
-
+    def _resolve_identity(self, peer_hash: bytes) -> Optional[RNS.Identity]:
+        """Resolve the peer's RNS.Identity from config or the known-destinations table."""
         peer_config = self.known_peers.get(peer_hash.hex())
         if peer_config and peer_config.identity_path:
             identity = RNS.Identity.from_file(peer_config.identity_path)
             if identity:
-                dest = RNS.Destination(
-                    identity,
-                    RNS.Destination.IN,
-                    RNS.Destination.SINGLE,
-                    self.app_name,
-                    self.aspect,
-                )
-                RNS.Transport.announce_table[peer_hash] = dest
-                return
+                return identity
+        # Fall back to whatever RNS already learned via announces.
+        return RNS.Identity.recall(peer_hash)
 
-        # Fallback: request path and wait for announce
-        RNS.Transport.request_path(peer_hash, None, None, False)
-        await self._wait_for_announce(peer_hash, timeout=30.0)
+    async def _ensure_path(self, peer_hash: bytes, timeout: float = 30.0) -> bool:
+        """Ensure RNS Transport has a path (next hop) to the peer destination."""
+        if RNS.Transport.has_path(peer_hash):
+            return True
+        RNS.Transport.request_path(peer_hash)
+        start = time.time()
+        while time.time() - start < timeout:
+            if RNS.Transport.has_path(peer_hash):
+                return True
+            await asyncio.sleep(0.25)
+        return RNS.Transport.has_path(peer_hash)
 
     async def _create_link(self, peer_hash: bytes) -> Optional[RNS.Link]:
-        """Create and establish a new Link to peer."""
-        dest = RNS.Transport.announce_table.get(peer_hash)
-        if not dest:
+        """Resolve identity + path, then establish an outbound Link to the peer."""
+        identity = self._resolve_identity(peer_hash)
+        if identity is None:
+            RNS.log(f"ICN LinkPool: no identity for peer {peer_hash.hex()[:16]}", RNS.LOG_DEBUG)
             return None
+
+        if not await self._ensure_path(peer_hash):
+            RNS.log(f"ICN LinkPool: no path to peer {peer_hash.hex()[:16]}", RNS.LOG_DEBUG)
+            return None
+
+        dest = RNS.Destination(
+            identity,
+            RNS.Destination.OUT,
+            RNS.Destination.SINGLE,
+            self.app_name,
+            self.aspect,
+        )
 
         link = RNS.Link(dest)
         timeout = 120.0
         start = time.time()
-
         while link.status != RNS.Link.ACTIVE:
             if link.status == RNS.Link.CLOSED:
                 return None
             await asyncio.sleep(0.1)
             if time.time() - start > timeout:
+                try:
+                    link.teardown()
+                except Exception:
+                    pass
                 return None
 
         return link
-
-    async def _wait_for_announce(self, peer_hash: bytes, timeout: float) -> None:
-        """Wait for announce to arrive in transport table."""
-        start = time.time()
-        while time.time() - start < timeout:
-            if peer_hash in RNS.Transport.announce_table:
-                return
-            await asyncio.sleep(5.0)
-            RNS.Transport.request_path(peer_hash, None, None, False)
 
     async def _monitor_links(self) -> None:
         """Periodic health check — remove dead links."""

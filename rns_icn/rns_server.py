@@ -216,9 +216,9 @@ class ICNServer(BaseICNServer):
         # Stop link pool (tears down all links)
         await self._link_pool.stop()
 
-        # Stop RNS if we started it
-        if self._started_rns and hasattr(RNS, "Reticulum") and RNS.Reticulum:
-            RNS.Reticulum().exit()
+        # Stop RNS if we started it (exit_handler is static and idempotent).
+        if self._started_rns and RNS.Reticulum.get_instance() is not None:
+            RNS.Reticulum.exit_handler()
 
         self._loop = None
 
@@ -242,20 +242,20 @@ class ICNServer(BaseICNServer):
             pass
 
     async def _inject_known_peers(self) -> None:
-        """Load all configured known_peers into RNS.Transport.announce_table."""
+        """Warm RNS path resolution for configured known_peers.
+
+        Issues a path request for each known peer so a route is available by
+        the time we try to establish a Link. Identity resolution itself is
+        handled in LinkPool from each peer's ``identity_path``.
+        """
         for peer_hash, peer_config in self._link_pool.known_peers.items():
-            if peer_config.identity_path:
-                identity = RNS.Identity.from_file(peer_config.identity_path)
-                if identity:
-                    dest = RNS.Destination(
-                        identity,
-                        RNS.Destination.IN,
-                        RNS.Destination.SINGLE,
-                        self.app_name,
-                        self.aspect,
-                    )
-                    RNS.Transport.announce_table[bytes.fromhex(peer_hash)] = dest
-                    RNS.log(f"ICN: Injected known peer {peer_config.name} ({peer_hash[:16]}) into announce table")
+            try:
+                peer_hash_bytes = bytes.fromhex(peer_hash)
+            except ValueError:
+                continue
+            if not RNS.Transport.has_path(peer_hash_bytes):
+                RNS.Transport.request_path(peer_hash_bytes)
+                RNS.log(f"ICN: Requested path to known peer {peer_config.name} ({peer_hash[:16]})")
 
     def _on_incoming_link(self, link: RNS.Link) -> None:
         """Called when a remote peer establishes a Link."""
