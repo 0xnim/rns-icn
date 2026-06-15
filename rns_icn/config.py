@@ -54,6 +54,11 @@ class ServerConfig:
     identity_path: str
     app_name: str = "icn"
     aspect: str = "default"
+    # RNS configuration directory. When set, the server initialises Reticulum
+    # against this directory — pointing it at a shared rnsd's configdir lets the
+    # server ride that transport daemon instead of owning interfaces itself.
+    # None uses RNS's default (~/.reticulum).
+    rns_configdir: Optional[str] = None
     mesh_interfaces: List[str] = field(default_factory=lambda: ["UTN Oregon"])
     role: ServerRole = ServerRole.ORIGIN
     announce_interval: float = 30.0
@@ -154,10 +159,15 @@ def _dict_to_server_config(data: Dict[str, Any], base_path: str) -> ServerConfig
     }
     role = role_map.get(role_name, ServerRole.ORIGIN)
 
+    rns_configdir = data.get("rns_configdir")
+    if rns_configdir:
+        rns_configdir = str(Path(rns_configdir).expanduser())
+
     return ServerConfig(
         identity_path=identity_path,
         app_name=data.get("app_name", "icn"),
         aspect=data.get("aspect", "default"),
+        rns_configdir=rns_configdir,
         mesh_interfaces=data.get("mesh_interfaces", ["UTN Oregon"]),
         role=role,
         announce_interval=data.get("announce_interval", 30.0),

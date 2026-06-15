@@ -140,7 +140,7 @@ class ICNServer(BaseICNServer):
         # Initialize RNS only if not already running (it's a process-global singleton;
         # calling RNS.Reticulum() when one exists raises "Attempt to reinitialise").
         if RNS.Reticulum.get_instance() is None:
-            RNS.Reticulum()
+            RNS.Reticulum(configdir=self.config.rns_configdir)
             self._started_rns = True
 
         # Create the destination that clients connect to

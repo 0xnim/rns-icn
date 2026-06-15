@@ -1,15 +1,16 @@
 [Unit]
-Description=RNS Transport + ICN Server
-After=network-online.target
+Description=ICN Origin Server (rns-icn)
+# Rides the shared rnsd transport daemon; start after it is up.
+After=network-online.target rnsd.service
 Wants=network-online.target
+Requires=rnsd.service
 
 [Service]
 Type=simple
 User=root
 Group=root
 Environment="HOME=/root"
-Environment="RNS_CONFIG=/etc/rnsd-icn"
-ExecStart=bash /opt/rns-icn/run_rns_icn.sh
+ExecStart=/opt/rns-icn-venv/bin/icn-server --config /etc/rns-icn/icn.toml
 Restart=always
 RestartSec=5
 StandardOutput=journal

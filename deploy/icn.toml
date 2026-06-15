@@ -1,0 +1,31 @@
+# Production ICN origin server config (deployed to /etc/rns-icn/icn.toml).
+#
+# Rides the shared rnsd transport daemon (see rnsd.service) rather than owning
+# mesh interfaces itself: rns_configdir points at the same configdir rnsd uses,
+# so RNS attaches to that running instance.
+#
+# Content is served from the persistent content store; publish into it with the
+# icn-publish CLI rather than seeding demo blobs in-process.
+
+[server]
+identity_path = "identity"          # resolved relative to this file: /etc/rns-icn/identity
+app_name = "icn"
+aspect = "default"
+
+# Attach to the shared rnsd transport daemon's configdir (see rnsd.service).
+rns_configdir = "/etc/rnsd"
+
+role = "ORIGIN"
+announce_interval = 30.0
+reannounce_on_link = true
+
+cs_max_entries = 10000
+cs_ttl_seconds = 0                  # <= 0 means no TTL (infinite)
+cs_path = "/var/lib/rns-icn/content_store.db"
+
+log_level = "INFO"
+log_json = true                     # structured logs for journald aggregation
+
+http_enabled = false
+http_host = "127.0.0.1"
+http_port = 8080
