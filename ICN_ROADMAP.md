@@ -6,71 +6,74 @@
 
 ---
 
-## Current State (v0.1 - Prototype)
+## Current State
+
+Phases 1 and 2 are complete; parts of Phase 4 (capability negotiation, pub/sub, chunked transfer) landed early. Phase 3 (signing/security) is the main unstarted work.
 
 | Component | Status | Gaps |
 |-----------|--------|------|
-| Client fetch | Works (CLI) | No retry, no timeout config |
-| Link establishment | Manual inject | Fragile, no reconnect |
-| Content store | In-memory | No persistence, no TTL |
-| Forwarding | None | Single-hop only |
-| Naming | /hash/label | No signing, no auth |
-| API | Ad-hoc Python | No versioning, nodocs |
-| Operations | Manual | No config, no metrics |
+| Client fetch | `ICNClient` with retry + timeout config | — |
+| Link establishment | `LinkPool` w/ reuse, health, announce injection | reconnect is on-use, not proactive |
+| Content store | SQLite + TTL + LRU + crash recovery | — |
+| Forwarding | Multi-hop (FIB/PIT/CS); `icn-router` binary | no cache coherency, no multi-path |
+| Naming | /hash/label, content-hash verified | **no signing / auth (Phase 3)** |
+| API | Versioned via capability exchange | per-packet version not in Interest/Data |
+| Operations | TOML config, JSON logs, health + metrics | — |
 
 ---
 
 ## Phase 1: Foundation (Weeks 1-4) — "Reliable Single-Hop"
 
 ### 1.1 ICN Transport Abstraction
-- [ ] `ICNClient` class with config-driven setup
-- [ ] `ICNServer` class with lifecycle management
-- [ ] Connection pooling / link reuse
-- [ ] Automatic announce table injection (configurable peer identities)
-- [ ] Graceful shutdown / cleanup
+- [x] `ICNClient` class with config-driven setup (`rns_icn/client.py`)
+- [x] `ICNServer` class with lifecycle management (`rns_icn/rns_server.py`, `start()`/`shutdown()`)
+- [x] Connection pooling / link reuse (`rns_icn/link_pool.py`)
+- [x] Automatic announce table injection (configurable peer identities) (`_inject_known_peers`)
+- [x] Graceful shutdown / cleanup
 
 ### 1.2 Reliability Layer
-- [ ] Interest retransmission (exponential backoff: 1s, 2s, 4s, 8s, max 30s)
-- [ ] Interest timeout (configurable, default 30s)
-- [ ] Duplicate Interest suppression (by name + nonce)
-- [ ] Data validation (content hash verification)
-- [ ] Link health monitoring + auto-reconnect
+- [x] Interest retransmission (exponential backoff: `min(base * 2**attempt, max)`, `client.py`)
+- [x] Interest timeout (configurable, default 30s) (`ClientConfig.fetch_timeout`)
+- [x] Duplicate Interest suppression (by name + nonce) (`Pit.check_loop` / `record_nonce`)
+- [x] Data validation (content hash verification) (`Data.verify_content_hash`)
+- [x] Link health monitoring + reconnect-on-use (`LinkPool._monitor_links`, `get_link`)
 
 ### 1.3 Persistent Content Store
-- [ ] SQLite backend (files + metadata)
-- [ ] TTL support (configurable per prefix)
-- [ ] LRU eviction (max size config)
-- [ ] Index by name + content hash
-- [ ] Atomic write + crash recovery
+- [x] SQLite backend (files + metadata) (`rns_icn/content_store.py`)
+- [x] TTL support (configurable per prefix) (`cs_prefix_ttls`, `_compute_ttl`)
+- [x] LRU eviction (max size config) (`max_entries`)
+- [x] Index by name (primary key + `name_prefixes` table; content hash stored per entry)
+- [x] Atomic write + crash recovery (WAL + `PRAGMA integrity_check` + salvage recovery)
 
 ### 1.4 Configuration & Operations
-- [ ] TOML config file (client + server)
-- [ ] Structured logging (JSON for aggregation)
-- [ ] Health endpoint (HTTP + RNS)
-- [ ] Metrics: fetch latency, hit/miss, link uptime
+- [x] TOML config file (client + server) (`rns_icn/config.py`)
+- [x] Structured logging (JSON for aggregation) (`rns_icn/icn_logging.py`, `log_json`)
+- [x] Health endpoint (HTTP + RNS) (`rns_icn/health.py`: `setup_http_api` + `is_health_interest`)
+- [x] Metrics: fetch latency, hit/miss, link uptime (`rns_icn/metrics.py`)
 
-**Deliverable:** `icn-client`, `icn-server` binaries with `icn.toml` config. Single-hop fetch works reliably with retries, persistence, observability.
+**Deliverable:** ✅ `icn-client`, `icn-server` binaries with `icn.toml` config. Single-hop fetch works reliably with retries, persistence, observability — proven over real RNS by `tests/test_integration.py::TestRNSIntegration`.
 
 ---
 
 ## Phase 2: Multi-Hop Forwarding (Weeks 5-8) — "Router Mesh"
 
 ### 2.1 ICN Router
-- [ ] `ICNRouter` class: forwards Interests, caches Data
-- [ ] FIB (Forwarding Information Base): prefix → next-hop(s)
-- [ ] PIT (Pending Interest Table): tracks in-flight Interests
-- [ ] CS (Content Store): local cache with TTL
+- [x] Router role: `Forwarder` forwards Interests and caches Data; driven by `icn-router` binary (`ServerRole.CACHE`)
+- [x] FIB (Forwarding Information Base): prefix → next-hop(s) (`rns_icn/fib.py`)
+- [x] PIT (Pending Interest Table): tracks in-flight Interests (`rns_icn/pit.py`)
+- [x] CS (Content Store): local cache with TTL (`rns_icn/content_store.py`, SQLite)
 
 ### 2.2 Forwarding Logic
-- [ ] Longest-prefix match for Interest forwarding
-- [ ] PIT aggregation (multiple Interests → single upstream)
-- [ ] Data return path via PIT (reverse path forwarding)
-- [ ] Loop detection (nonce + hop count)
+- [x] Longest-prefix match for Interest forwarding (`Fib.lookup`)
+- [x] PIT aggregation (multiple Interests → single upstream)
+- [x] Data return path via PIT (reverse path forwarding)
+- [x] Loop detection (nonce-based; `Pit.check_loop`)
+- [ ] Hop-count limit on Interests (defence-in-depth beyond nonce)
 
 ### 2.3 Router Mesh Formation
-- [ ] Router discovery via RNS announces
-- [ ] Prefix announcement (ICN prefix + router identity)
-- [ ] Dynamic FIB updates (prefix withdrawal/re-announce)
+- [x] Router discovery via RNS announces (`rns_icn/peer_discovery.py`)
+- [x] Route installation from configured peers (`icn-router` derives FIB prefix from peer identity)
+- [ ] Dynamic FIB updates (prefix withdrawal/re-announce; routes re-installed on link reconnect)
 - [ ] Multi-path support (ECMP or primary/backup)
 
 ### 2.4 Cache Coherency
@@ -78,7 +81,7 @@
 - [ ] Stale-while-revalidate
 - [ ] Cache purge/invalidation protocol
 
-**Deliverable:** `icn-router` binary. Client ↔ Router ↔ ... ↔ Router ↔ Server works. Content caches at each hop.
+**Deliverable:** ✅ `icn-router` binary. Client ↔ Router ↔ Server works over real RNS and content caches at the hop — proven end-to-end by `tests/test_integration.py::TestRNSMultiHop` (three processes, three Reticulum instances over localhost TCP). **Residual for full Phase 2:** §2.4 cache coherency, plus dynamic FIB updates / multi-path (§2.3) and a hop-count limit (§2.2).
 
 ---
 
@@ -112,24 +115,24 @@
 ## Phase 4: Protocol Maturity (Weeks 13-16) — "LXMF Parity"
 
 ### 4.1 Protocol Versioning
-- [ ] Protocol version in Interest/Data headers
-- [ ] Capability negotiation (client ↔ router ↔ server)
+- [ ] Protocol version in Interest/Data headers (Interest/Data carry a type byte but no version field; only `Subscribe`/`CapPeer` are versioned)
+- [x] Capability negotiation (client ↔ router ↔ server) (`CapPeer` exchange on each link; `version` + 4-byte feature bitmask)
 - [ ] Backward compatibility policy
 
 ### 4.2 Advanced Features
-- [ ] **Pub/Sub**: `Subscribe(prefix)` → proactive Data push
-- [ ] **Selectors**: `Interest(name, selector: latest/oldest/>=version)`
-- [ ] **Chunked transfer**: Large files via segmented Data + reassembly
+- [x] **Pub/Sub**: `Subscribe(prefix)` → proactive Data push (`rns_icn/aps.py`, `OfflineQueue` for disconnected subscribers)
+- [ ] **Selectors** (partial): `min_sequence` (`>=version`) implemented (`InterestSelector`); `latest`/`oldest` not yet
+- [x] **Chunked transfer**: Large files via segmented Data + reassembly (`chunker.py`, `assembler.py`, `resource_transport.py`)
 - [ ] **Priority/QoS**: Interest priority field, router queueing
 
 ### 4.3 Developer Experience
-- [ ] SDKs: Python, Rust, Go, TypeScript
-- [ ] CLI: `icn fetch`, `icn publish`, `icn subscribe`
-- [ ] HTTP gateway (optional): `GET /icn/<name>`
+- [ ] SDKs: Python, Rust, Go, TypeScript (Python only)
+- [ ] CLI (partial): `icn-fetch`, `icn-publish` shipped; no `icn subscribe`
+- [ ] HTTP gateway (optional): `GET /icn/<name>` (only health/metrics HTTP API exists)
 - [ ] Documentation: protocol spec, API ref, tutorials
 
 ### 4.4 Testing & Compliance
-- [ ] Integration test suite (mesh sim via RNS testnet)
+- [ ] Integration test suite (partial): real-RNS end-to-end tests (2-node + 3-node multi-hop over localhost TCP), not yet a multi-node testnet sim
 - [ ] Chaos testing (link loss, router crash, partition)
 - [ ] Interop test vectors
 - [ ] Load testing (10K+ concurrent fetches)

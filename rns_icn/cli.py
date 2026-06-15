@@ -11,6 +11,7 @@ from pathlib import Path
 from .config import load_client_config, load_server_config
 from .client import ICNClient
 from .rns_server import ICNServer
+from .server import ServerRole
 from .name import Name
 from .packet import Data, Interest
 from .health import is_health_interest
@@ -112,6 +113,98 @@ async def server_main() -> int:
     return 0
 
 
+async def _install_peer_routes(server: "ICNServer", config) -> list[tuple[str, Name]]:
+    """Connect to each known peer and install a FIB route for its content.
+
+    ICN names are self-certifying: content under ``/<peer-identity-hash>/...``
+    is authoritative to that peer. So for each reachable known peer we add a
+    route keyed by the peer's 16-byte identity hash pointing at the Link face
+    we just established. Interests for that prefix are then forwarded upstream
+    by the Forwarder on a CS miss (reverse-path Data is cached at this hop).
+
+    Note: ``connect()`` uses the RNS *destination* hash, while the FIB prefix
+    is the *identity* hash — these differ, so a peer's ``identity_path`` is
+    required to derive the routable prefix.
+    """
+    import RNS
+
+    installed: list[tuple[str, Name]] = []
+    for peer in config.known_peers:
+        face_id = await server.connect(peer.destination_hash)
+        if face_id is None:
+            print(f"  ! Could not link to peer '{peer.name}' ({peer.destination_hash[:16]})",
+                  file=sys.stderr)
+            continue
+        if not peer.identity_path:
+            print(f"  ! Peer '{peer.name}' has no identity_path; cannot install route",
+                  file=sys.stderr)
+            continue
+        identity = RNS.Identity.from_file(peer.identity_path)
+        if identity is None:
+            print(f"  ! Could not load identity for peer '{peer.name}' from {peer.identity_path}",
+                  file=sys.stderr)
+            continue
+        prefix = Name(identity.hash)
+        server.forwarder.add_route(prefix, face_id, cost=10)
+        installed.append((peer.name, prefix))
+        print(f"  Route: /{identity.hash.hex()} → {peer.name} (face #{face_id})")
+    return installed
+
+
+async def router_main() -> int:
+    """icn-router binary entry point.
+
+    Runs an ICN server in a forwarding role: links to configured upstream
+    peers, installs FIB routes for their content prefixes, and forwards
+    Interests on a local cache miss while caching reverse-path Data.
+    """
+    parser = argparse.ArgumentParser(prog="icn-router", description="ICN Router")
+    parser.add_argument("--config", default="icn.toml", help="Config file path")
+    args = parser.parse_args()
+
+    config = load_server_config(args.config)
+    # A router forwards/caches rather than originating content. Honour an
+    # explicit role from config, but default ORIGIN configs to CACHE here.
+    if config.role == ServerRole.ORIGIN:
+        config.role = ServerRole.CACHE
+
+    loop = asyncio.get_running_loop()
+    stop_event = asyncio.Event()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            loop.add_signal_handler(sig, stop_event.set)
+        except NotImplementedError:
+            pass  # Windows
+
+    print("Starting ICN Router...")
+    print(f"  Identity: {config.identity_path}")
+    print(f"  Role: {config.role.name}")
+    print(f"  CS: {config.cs_path} (max {config.cs_max_entries}, TTL {config.cs_ttl_seconds}s)")
+
+    server = ICNServer(config)
+    try:
+        await server.start()
+        print(f"  Destination: {server.hexhash}")
+        print(f"  Listening on /{config.app_name}/{config.aspect}")
+
+        if not config.known_peers:
+            print("  ! No known_peers configured — router has no upstream routes",
+                  file=sys.stderr)
+        installed = await _install_peer_routes(server, config)
+        print(f"Ready. {len(installed)} upstream route(s) installed. Press Ctrl+C to stop.")
+
+        if config.http_enabled:
+            from .health import setup_http_api
+            runner = await setup_http_api(server, metrics, config.http_host, config.http_port)
+            print(f"  HTTP API: http://{config.http_host}:{config.http_port} (health, metrics)")
+
+        await stop_event.wait()
+        print("\nShutting down...")
+    finally:
+        await server.shutdown()
+    return 0
+
+
 def client_main_sync() -> int:
     """Synchronous wrapper for icn-client entry point."""
     return asyncio.run(client_main())
@@ -122,16 +215,23 @@ def server_main_sync() -> int:
     return asyncio.run(server_main())
 
 
+def router_main_sync() -> int:
+    """Synchronous wrapper for icn-router entry point."""
+    return asyncio.run(router_main())
+
+
 def main() -> int:
     """Entry point for both binaries."""
     if "icn-client" in sys.argv[0] or (len(sys.argv) > 0 and sys.argv[0].endswith("icn-client")):
         return asyncio.run(client_main())
     elif "icn-server" in sys.argv[0] or (len(sys.argv) > 0 and sys.argv[0].endswith("icn-server")):
         return asyncio.run(server_main())
+    elif "icn-router" in sys.argv[0] or (len(sys.argv) > 0 and sys.argv[0].endswith("icn-router")):
+        return asyncio.run(router_main())
     else:
-        # Called as module: python -m rns_icn.cli client|server
+        # Called as module: python -m rns_icn.cli client|server|router
         if len(sys.argv) < 2:
-            print("Usage: python -m rns_icn.cli [client|server] [args...]")
+            print("Usage: python -m rns_icn.cli [client|server|router] [args...]")
             return 1
         subcommand = sys.argv[1]
         sys.argv = [sys.argv[0]] + sys.argv[2:]  # Remove subcommand
@@ -139,6 +239,8 @@ def main() -> int:
             return asyncio.run(client_main())
         elif subcommand == "server":
             return asyncio.run(server_main())
+        elif subcommand == "router":
+            return asyncio.run(router_main())
         else:
             print(f"Unknown subcommand: {subcommand}")
             return 1
