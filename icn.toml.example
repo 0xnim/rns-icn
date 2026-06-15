@@ -26,6 +26,13 @@ max_retries = 5
 base_retry_delay = 1.0
 max_retry_delay = 30.0
 
+# Security: producer signature verification.
+# Origins sign Data with their RNS identity (Ed25519). The client always
+# rejects Data whose signature is present but invalid. When require_signature
+# is true, it also rejects unsigned Data and Data from producers whose key it
+# cannot recall. Default false = verify-if-present (additive rollout).
+require_signature = false
+
 # Logging
 log_level = "INFO"
 log_json = false

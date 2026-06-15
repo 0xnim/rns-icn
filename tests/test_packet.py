@@ -177,7 +177,7 @@ class TestData:
 
     def test_with_signature(self):
         name = Name(rns_addr(0x01), [b"test"])
-        sig = b"\xAA" * 96
+        sig = b"\xAA" * 64  # RNS Ed25519 signatures are 64 bytes
         data = Data.new(name=name, content=b"hello")
         data.signature = sig
         serialized = data.to_bytes()

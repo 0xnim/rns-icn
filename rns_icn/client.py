@@ -119,6 +119,10 @@ class ICNClient:
                 )
 
                 if result and result.verify_content_hash():
+                    sig_ok, sig_err = self._check_signature(result)
+                    if not sig_ok:
+                        last_error = sig_err
+                        continue
                     # Record successful fetch latency
                     fetch_latency = time.time() - fetch_start
                     metrics.record_fetch(fetch_latency, success=True)
@@ -144,6 +148,35 @@ class ICNClient:
         if last_error:
             raise last_error
         return None
+
+    def _check_signature(self, data: Data) -> tuple[bool, Optional[Exception]]:
+        """Verify a Data packet's producer signature per policy.
+
+        Trust anchor is the producer's RNS identity, recalled from the name's
+        producer address (``name.rns_addr``). A present-but-invalid signature
+        is always rejected. A missing signature, or one whose producer key we
+        can't recall, is rejected only when ``require_signature`` is set.
+        """
+        if data.signature is not None:
+            # The producer address in a name is the producer's *identity* hash
+            # (not a destination hash), so recall accordingly.
+            identity = RNS.Identity.recall(
+                data.name.rns_addr, from_identity_hash=True
+            )
+            if identity is not None:
+                if data.verify_signature(identity.validate):
+                    return True, None
+                return False, ValueError("Data signature verification failed")
+            # Signed, but we don't have the producer's key to verify.
+            if self.config.require_signature:
+                return False, ValueError(
+                    "producer identity unknown; cannot verify signature"
+                )
+            return True, None
+        # Unsigned.
+        if self.config.require_signature:
+            return False, ValueError("Data is unsigned but signature is required")
+        return True, None
 
     async def fetch_manifest(
         self,

@@ -166,6 +166,7 @@ class ContentStore:
             "sequence": sequence,
             "fresh": data.metadata.freshness.fresh,
             "age_seconds": age_seconds,
+            "signature": data.signature.hex() if data.signature is not None else None,
         })
         inserted_at = int(time.time())
         ttl = self._compute_ttl(name)
@@ -248,7 +249,9 @@ class ContentStore:
 
         self._hits += 1
         metadata = self._parse_metadata(metadata_json)
-        return Data(name=stored_name, content=content_bytes, metadata=metadata)
+        signature = self._parse_signature(metadata_json)
+        return Data(name=stored_name, content=content_bytes,
+                    signature=signature, metadata=metadata)
 
     def get_prefix(self, prefix: Name) -> Optional[Data]:
         """Longest prefix match: find stored name that has this prefix."""
@@ -273,8 +276,10 @@ class ContentStore:
             if self._verify_content(content_bytes, metadata_json):
                 stored_name = Name.from_bytes(name_bytes)
                 metadata = self._parse_metadata(metadata_json)
+                signature = self._parse_signature(metadata_json)
                 self._hits += 1
-                return Data(name=stored_name, content=content_bytes, metadata=metadata)
+                return Data(name=stored_name, content=content_bytes,
+                            signature=signature, metadata=metadata)
 
         self._misses += 1
         return None
@@ -287,6 +292,10 @@ class ContentStore:
             return actual_hash == expected_hash
         except (json.JSONDecodeError, KeyError, ValueError):
             return False
+
+    def _parse_signature(self, metadata_json: str) -> Optional[bytes]:
+        sig_hex = json.loads(metadata_json).get("signature")
+        return bytes.fromhex(sig_hex) if sig_hex else None
 
     def _parse_metadata(self, metadata_json: str) -> DataMetadata:
         meta = json.loads(metadata_json)

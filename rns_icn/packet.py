@@ -15,9 +15,12 @@ import os
 import struct
 from dataclasses import dataclass, field
 from enum import IntEnum
-from typing import Optional
+from typing import Callable, Optional
 
 from .name import Name
+
+# RNS Identity.sign() produces a 64-byte Ed25519 signature.
+SIGNATURE_BYTES = 64
 
 # ── Varint (same encoding as rsticulum-icn for interop) ──
 
@@ -274,7 +277,7 @@ class Data:
     """A Data packet — 'Here is the content you asked for.'
 
     Wire: [type:1=0x02][name_len:varint][name...][content_len:4][content...]
-          [flags:1][metadata_len:varint if h'01][metadata...][sig:96 if h'02]
+          [flags:1][metadata_len:varint if h'01][metadata...][sig:64 if h'02]
       flags bit 0: has_metadata
       flags bit 1: has_signature
     """
@@ -314,6 +317,31 @@ class Data:
         if self.metadata.content_hash is not None:
             h.update(self.metadata.content_hash)
         return h.digest()
+
+    def sign(self, signer: Callable[[bytes], bytes]) -> Data:
+        """Attach a producer signature over signed_hash().
+
+        ``signer`` is typically ``RNS.Identity.sign``; it must return a
+        SIGNATURE_BYTES-long Ed25519 signature.
+        """
+        sig = signer(self.signed_hash())
+        if len(sig) != SIGNATURE_BYTES:
+            raise DataError(
+                f"signature must be {SIGNATURE_BYTES} bytes, got {len(sig)}"
+            )
+        self.signature = sig
+        return self
+
+    def verify_signature(self, validator: Callable[[bytes, bytes], bool]) -> bool:
+        """Verify the attached signature against signed_hash().
+
+        ``validator`` is typically ``RNS.Identity.validate`` for the
+        producer recalled from ``name.rns_addr``. Returns False if no
+        signature is present.
+        """
+        if self.signature is None:
+            return False
+        return validator(self.signature, self.signed_hash())
 
     def to_bytes(self) -> bytes:
         name_bytes = self.name.to_bytes()
@@ -380,9 +408,9 @@ class Data:
 
         signature = None
         if flags & 0x02:
-            if pos + 96 > len(data):
+            if pos + SIGNATURE_BYTES > len(data):
                 raise DataError("buffer too short for signature")
-            signature = data[pos:pos + 96]
+            signature = data[pos:pos + SIGNATURE_BYTES]
 
         return cls(name=name, content=content, signature=signature, metadata=metadata)
 

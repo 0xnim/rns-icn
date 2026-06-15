@@ -9,7 +9,9 @@ RNS encrypted Links.
 
 > Status: Phases 1 & 2 of the [roadmap](ICN_ROADMAP.md) are complete — reliable
 > single-hop fetch and multi-hop router forwarding, proven end-to-end over real
-> RNS. Signing/auth (Phase 3) is the main unstarted work.
+> RNS. Phase 3 signing has landed: origins sign Data with their Ed25519 RNS
+> identity and clients verify it (cache-poisoning defence). Access control and
+> name resolution (Phase 3.3/3.4) are the main remaining work.
 
 ## How it works
 

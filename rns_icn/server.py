@@ -14,7 +14,7 @@ import asyncio
 import enum
 import hashlib
 import time
-from typing import Optional
+from typing import Callable, Optional
 
 from .aps import APSManager
 from .content_store import ContentStore
@@ -82,13 +82,18 @@ class ICNServer:
     """
 
     def __init__(self, rns_identity: bytes, cs_max: int = 10000,
-                 role: ServerRole = ServerRole.ORIGIN):
+                 role: ServerRole = ServerRole.ORIGIN,
+                 signer: Optional[Callable[[bytes], bytes]] = None):
         """Args:
             rns_identity: 16-byte RNS address of this server
             role: ServerRole (ORIGIN, CACHE, or PROPAGATION)
+            signer: optional callable (typically RNS.Identity.sign) used to
+                sign Data this server originates. Only Data whose producer
+                address equals our own rns_addr is signed.
         """
         self.role = role
         self.rns_addr = rns_identity
+        self._signer = signer
         self.forwarder = Forwarder(cs_max=cs_max)
         self.offline_queue = OfflineQueue(self, max_age_seconds=86400)
         self.aps = APSManager(self)
@@ -113,11 +118,28 @@ class ICNServer:
         self.forwarder.register_face(face)
         return face
 
+    def _maybe_sign(self, data: Optional[Data]) -> Optional[Data]:
+        """Sign Data we originate, in place.
+
+        Only signs when a signer is configured, the Data is not already
+        signed, and its producer address is our own — so caches/propagation
+        nodes relay an upstream producer's signature untouched rather than
+        re-signing with the wrong key.
+        """
+        if (
+            data is not None
+            and self._signer is not None
+            and data.signature is None
+            and data.name.rns_addr == self.rns_addr
+        ):
+            data.sign(self._signer)
+        return data
+
     def _serve_from_cs(self, interest: Interest, in_face_id: FaceId) -> Optional[Data]:
         """Check local ContentStore for matching data."""
         if interest.can_be_prefix:
-            return self.forwarder.cs.get_prefix(interest.name)
-        return self.forwarder.cs.get(interest.name)
+            return self._maybe_sign(self.forwarder.cs.get_prefix(interest.name))
+        return self._maybe_sign(self.forwarder.cs.get(interest.name))
 
     async def _build_manifest_data(self, include_downstream: bool = True) -> Data:
         """Build a Data packet containing our content manifest.
@@ -174,6 +196,7 @@ class ICNServer:
             content=content,
         )
         data.metadata.sequence = manifest.sequence
+        self._maybe_sign(data)
         return data
 
     def _build_manifest_entries(self) -> list[ManifestEntry]:
@@ -268,7 +291,7 @@ class ICNServer:
             # Walk CS for matching entries
             for entry_name in list(getattr(self.forwarder.cs, "_entries", {}).keys()):
                 if entry_name.starts_with(sub.name):
-                    data = self.forwarder.cs.get(entry_name)
+                    data = self._maybe_sign(self.forwarder.cs.get(entry_name))
                     if data is not None:
                         face = self._faces.get(face_id)
                         if face:
@@ -288,6 +311,7 @@ class ICNServer:
         OfflineQueue for delivery on reconnect.
         Also propagates to all peered servers for mesh-wide replication.
         """
+        self._maybe_sign(data)
         self.forwarder.cs.insert(data.name, data)
         await self.aps.publish(data, offline_queue=self.offline_queue)
         await self.propagation.propagate(data)

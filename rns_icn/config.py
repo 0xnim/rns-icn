@@ -42,6 +42,10 @@ class ClientConfig:
     max_retries: int = 5
     base_retry_delay: float = 1.0
     max_retry_delay: float = 30.0
+    # When True, reject Data that isn't signed-and-verified against the
+    # producer identity. When False (default), verify signatures when present
+    # but accept unsigned/unverifiable Data (hash-only, additive rollout).
+    require_signature: bool = False
     log_level: str = "INFO"
     log_json: bool = False
 
@@ -125,6 +129,7 @@ def _dict_to_client_config(data: Dict[str, Any], base_path: str) -> ClientConfig
         connect_timeout=data.get("connect_timeout", 60.0),
         fetch_timeout=data.get("fetch_timeout", 30.0),
         path_request_timeout=data.get("path_request_timeout", 30.0),
+        require_signature=data.get("require_signature", False),
         log_level=data.get("log_level", "INFO"),
         log_json=data.get("log_json", False),
     )

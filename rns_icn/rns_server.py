@@ -68,8 +68,14 @@ class ICNServer(BaseICNServer):
         self.app_name = config.app_name
         self.aspect = config.aspect
 
-        # Base ICNServer uses the 16-byte RNS address
-        super().__init__(self.identity.hash, cs_max=config.cs_max_entries, role=config.role)
+        # Base ICNServer uses the 16-byte RNS address; pass the identity's
+        # Ed25519 signer so origin-produced Data is signed (Phase 3.1/3.2).
+        super().__init__(
+            self.identity.hash,
+            cs_max=config.cs_max_entries,
+            role=config.role,
+            signer=self.identity.sign,
+        )
 
         # Replace in-memory ContentStore with SQLite-backed persistent store
         from .content_store import ContentStore as SQLiteContentStore

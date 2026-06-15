@@ -8,7 +8,7 @@
 
 ## Current State
 
-Phases 1 and 2 are complete; parts of Phase 4 (capability negotiation, pub/sub, chunked transfer) landed early. Phase 3 (signing/security) is the main unstarted work.
+Phases 1 and 2 are complete; parts of Phase 4 (capability negotiation, pub/sub, chunked transfer) landed early. Phase 3.1/3.2 (signed manifests + per-packet producer signatures) is now implemented; access control (3.3) and name resolution (3.4) remain.
 
 | Component | Status | Gaps |
 |-----------|--------|------|
@@ -16,7 +16,7 @@ Phases 1 and 2 are complete; parts of Phase 4 (capability negotiation, pub/sub, 
 | Link establishment | `LinkPool` w/ reuse, health, announce injection | reconnect is on-use, not proactive |
 | Content store | SQLite + TTL + LRU + crash recovery | — |
 | Forwarding | Multi-hop (FIB/PIT/CS); `icn-router` binary | no cache coherency, no multi-path |
-| Naming | /hash/label, content-hash verified | **no signing / auth (Phase 3)** |
+| Naming | /hash/label, content-hash verified, **Ed25519 producer signatures** | access control + name resolution (Phase 3.3/3.4) |
 | API | Versioned via capability exchange | per-packet version not in Interest/Data |
 | Operations | TOML config, JSON logs, health + metrics | — |
 
@@ -88,15 +88,16 @@ Phases 1 and 2 are complete; parts of Phase 4 (capability negotiation, pub/sub, 
 ## Phase 3: Naming, Security & Auth (Weeks 9-12) — "Trust & Identity"
 
 ### 3.1 Signed Manifests
-- [ ] Producer keypair (Ed25519)
-- [ ] Manifest signing (manifest + sequence + timestamp)
-- [ ] Client validation (trusted producer keys)
+- [x] Producer keypair (Ed25519) — the producer's RNS identity (`name.rns_addr` is its address)
+- [x] Manifest signing (`ICNServer._maybe_sign` signs origin-owned Data incl. manifests; signs over `name + content + content_hash`)
+- [x] Client validation (`ICNClient._check_signature` recalls producer via `RNS.Identity.recall`, `verify-if-present` + `require_signature` strict mode)
 - [ ] Key rotation support
+- [ ] Sequence/timestamp inside the signed envelope (currently `signed_hash` covers name+content+hash, not sequence)
 
 ### 3.2 Signed Data Packets
-- [ ] Per-packet signature (for large content)
-- [ ] Manifest references signed content hashes
-- [ ] Selective verification (streaming large files)
+- [x] Per-packet signature (`Data.sign`/`verify_signature`, 64-byte Ed25519; persisted in CS so caches re-serve verifiable Data)
+- [x] Manifest references signed content hashes (entries carry `content_hash`; Data binds name↔content↔hash)
+- [ ] Per-chunk signatures for `resource_transport` (selective verification of streamed large files)
 
 ### 3.3 Access Control
 - [ ] Encrypted content (optional per-packet)
