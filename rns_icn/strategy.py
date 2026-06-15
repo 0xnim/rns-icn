@@ -8,7 +8,7 @@ from enum import Enum
 from typing import Optional
 
 from .face import FaceId
-from .packet import Data, Freshness, Interest
+from .packet import Data, Interest
 from .pit import PitEntry
 
 

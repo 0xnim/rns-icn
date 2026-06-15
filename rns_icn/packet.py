@@ -19,7 +19,6 @@ from typing import Optional
 
 from .name import Name
 
-
 # ── Varint (same encoding as rsticulum-icn for interop) ──
 
 

@@ -18,7 +18,6 @@ Flow:
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import Optional
 
@@ -330,7 +329,7 @@ class PropagationManager:
             return 0
 
         # Build local manifest to discover streams
-        from .manifest import Manifest, ManifestEntry, EntryKind
+        from .manifest import EntryKind
         entries = list(self._server._build_manifest_entries())
         if not entries:
             return 0

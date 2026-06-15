@@ -17,8 +17,8 @@ import sys
 import RNS
 
 from rns_icn.config import ServerConfig
-from rns_icn.rns_server import ICNServer
 from rns_icn.name import Name
+from rns_icn.rns_server import ICNServer
 
 APP_NAME = "icn"
 ASPECT = "default"

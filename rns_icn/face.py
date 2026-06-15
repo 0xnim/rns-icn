@@ -5,9 +5,12 @@ from __future__ import annotations
 import asyncio
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
-from .packet import Data, Interest, PacketType, parse_packet
+from .packet import Data, Interest, PacketType
+
+if TYPE_CHECKING:
+    import RNS
 
 FaceId = int
 
@@ -44,6 +47,10 @@ class Face(ABC):
 
 class TestFace(Face):
     """In-process face using asyncio queues."""
+
+    # Despite the name, this is production helper infrastructure, not a pytest
+    # test case — tell pytest not to try collecting it (it has an __init__).
+    __test__ = False
 
     def __init__(self, face_id: FaceId):
         self._id = face_id
@@ -113,6 +120,10 @@ def test_face_pair() -> tuple[TestFace, TestFace]:
     return a, b
 
 
+# Not a pytest test despite the test_ prefix — it's a connected-pair factory.
+test_face_pair.__test__ = False
+
+
 # ── LinkFace: Face over RNS Link with Channel ──
 
 
@@ -128,8 +139,7 @@ class LinkFace(Face):
     """
 
     def __init__(self, face_id: FaceId, link: "RNS.Link", loop: asyncio.AbstractEventLoop | None = None):
-        import RNS
-        from RNS.Channel import MessageBase, ChannelException
+        from RNS.Channel import ChannelException, MessageBase
 
         class _ICNMessage(MessageBase):
             """Channel message wrapping raw ICN Interest/Data bytes."""

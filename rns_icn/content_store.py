@@ -7,7 +7,7 @@ import json
 import sqlite3
 import time
 from pathlib import Path
-from typing import Optional, Dict, List
+from typing import Dict, Optional
 
 from .name import Name
 from .packet import Data, DataMetadata, Freshness
@@ -338,9 +338,6 @@ class ContentStore:
         return self._conn.execute(
             "SELECT 1 FROM content WHERE name_hash = ?", (name_hash,)
         ).fetchone() is not None
-
-    def __len__(self) -> int:
-        return self._conn.execute("SELECT COUNT(*) FROM content").fetchone()[0]
 
     @property
     def hits(self) -> int:

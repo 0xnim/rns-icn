@@ -9,9 +9,9 @@ import tempfile
 import RNS
 
 from rns_icn.config import ServerConfig
-from rns_icn.rns_server import ICNServer
 from rns_icn.name import Name
 from rns_icn.packet import Data
+from rns_icn.rns_server import ICNServer
 
 
 def _ephemeral_config() -> ServerConfig:
@@ -69,7 +69,7 @@ def main():
 
 
 async def _publish(peer_hash: str, name_str: str, content: bytes):
-    print(f"[publish] Initializing RNS...", file=sys.stderr)
+    print("[publish] Initializing RNS...", file=sys.stderr)
 
     server = ICNServer(_ephemeral_config())
     await server.start()
@@ -130,7 +130,7 @@ async def _publish(peer_hash: str, name_str: str, content: bytes):
     if manifest_result is not None:
         print(f"[publish] Manifest confirmed ({len(manifest_result.content)} bytes)", file=sys.stderr)
     else:
-        print(f"[publish] Warning: Could not verify manifest update", file=sys.stderr)
+        print("[publish] Warning: Could not verify manifest update", file=sys.stderr)
 
     print(f"[publish] Published '{name_str}' ({len(content)} bytes) → {peer_hash}", file=sys.stderr)
 

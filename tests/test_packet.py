@@ -1,11 +1,18 @@
 """Tests for Interest, Data, and packet wire format."""
 
 import pytest
+
+from rns_icn.name import RNS_ADDR_BYTES, Name
 from rns_icn.packet import (
-    Interest, InterestError, InterestSelector, Data, DataError, DataMetadata,
-    Freshness, PacketType, Packet, parse_packet,
+    Data,
+    DataMetadata,
+    Freshness,
+    Interest,
+    InterestError,
+    InterestSelector,
+    PacketType,
+    parse_packet,
 )
-from rns_icn.name import Name, RNS_ADDR_BYTES
 
 
 def rns_addr(byte_val: int = 0x01) -> bytes:

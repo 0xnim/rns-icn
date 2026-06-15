@@ -15,7 +15,6 @@ Design:
 from __future__ import annotations
 
 import time
-from typing import Optional
 
 from .face import FaceId
 from .name import Name

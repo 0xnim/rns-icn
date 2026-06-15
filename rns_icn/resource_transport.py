@@ -27,7 +27,6 @@ import RNS
 
 from .packet import Data
 
-
 # ── Constants ──
 
 DEFAULT_RESOURCE_THRESHOLD = 100 * 1024  # 100 KB
@@ -123,7 +122,9 @@ class ResourcePublisher:
         try:
             # Create the resource.  This starts the transfer in the RNS
             # thread pool; we await the callback via Future.
-            resource = RNS.Resource(
+            # Bound (not directly used) so the Resource stays alive for the
+            # duration of the transfer — we await completion via `future`.
+            _resource = RNS.Resource(
                 wrapped,           # data bytes
                 self._link,        # link to send over
                 callback=on_conclude,

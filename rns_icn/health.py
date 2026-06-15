@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import json
 import time
-from typing import Optional, Dict, Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from aiohttp import web
 
@@ -14,13 +13,11 @@ else:
     ICNServer = object
 
 from rns_icn.metrics import MetricsCollector
-from rns_icn.content_store import ContentStore
 
 
 async def health_handler(request: web.Request) -> web.Response:
     """HTTP /health endpoint — returns JSON health status."""
     server: ICNServer = request.app["server"]
-    collector: MetricsCollector = request.app.get("metrics", MetricsCollector())
 
     content_store = server.forwarder.cs
 

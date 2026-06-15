@@ -3,22 +3,41 @@
 import asyncio
 import hashlib
 import json
+
 import pytest
+
+from rns_icn.assembler import (
+    HashMismatchError,
+    MissingChunkError,
+    assemble,
+    assemble_fast,
+    assemble_verified,
+    missing_labels,
+    verify_chunk,
+    verify_chunks,
+)
+from rns_icn.chunker import (
+    EmptyContentError,
+    chunk_content,
+)
 from rns_icn.content_store import ContentStore
+from rns_icn.face import TestFace
+from rns_icn.face import test_face_pair as make_face_pair
 from rns_icn.fib import Fib
+from rns_icn.forwarder import Forwarder
+from rns_icn.manifest import (
+    ChunkRef,
+    ContentManifest,
+    ContentManifestError,
+    EntryKind,
+    Manifest,
+    ManifestEntry,
+)
+from rns_icn.name import RNS_ADDR_BYTES, Name, NameError
+from rns_icn.packet import Data, DataMetadata, Interest, InterestSelector
 from rns_icn.pit import Pit, PitOp
 from rns_icn.strategy import BestRoute, StrategyDecision
-from rns_icn.name import Name, NameError, RNS_ADDR_BYTES
-from rns_icn.packet import Interest, Data, InterestSelector
-from rns_icn.forwarder import Forwarder
-from rns_icn.face import TestFace, test_face_pair as make_face_pair
-from rns_icn.manifest import Manifest, ManifestEntry, EntryKind, ContentManifest, ChunkRef, ContentManifestError
-from rns_icn.chunker import ChunkResult, ChunkerError, EmptyContentError, chunk_content, DEFAULT_CHUNK_SIZE
-from rns_icn.assembler import (
-    AssemblyError, MissingChunkError, HashMismatchError, IntegrityError,
-    assemble, assemble_verified, assemble_fast, verify_chunk, verify_chunks, missing_labels,
-)
-from rns_icn.packet import Interest, Data, DataMetadata, InterestSelector
+
 
 def rns_addr(byte_val: int = 0x01) -> bytes:
     return bytes([byte_val] + [0] * (RNS_ADDR_BYTES - 1))
@@ -354,7 +373,7 @@ class TestForwarder:
 
         async def producer():
             while True:
-                interest = await face_b.recv_packet()
+                await face_b.recv_packet()
                 # Nothing — express_interest in TestFace handles the loop
                 await asyncio.sleep(0.01)
 
@@ -508,7 +527,6 @@ class TestManifest:
                 )
             ],
         )
-        json_data = manifest.to_json()
         parsed = Manifest.from_dict(manifest.to_dict())
         assert parsed.sequence == manifest.sequence
         assert parsed.producer == addr

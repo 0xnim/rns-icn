@@ -20,13 +20,13 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Callable, Optional
 
 import RNS
 
 from .face import FaceId
-from .packet import CapPeer, FEATURE_APS
+from .packet import CapPeer
 
 logger = logging.getLogger(__name__)
 

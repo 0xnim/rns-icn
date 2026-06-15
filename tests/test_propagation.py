@@ -15,8 +15,7 @@ import asyncio
 
 import pytest
 
-from rns_icn.face import FaceId
-from rns_icn.name import Name, RNS_ADDR_BYTES
+from rns_icn.name import RNS_ADDR_BYTES, Name
 from rns_icn.packet import (
     Data,
     Packet,
@@ -24,7 +23,7 @@ from rns_icn.packet import (
     PropPeer,
     parse_packet,
 )
-from rns_icn.propagation import PropagationError, PropagationManager
+from rns_icn.propagation import PropagationManager
 from rns_icn.server import ICNServer
 
 

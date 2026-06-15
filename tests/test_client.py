@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from rns_icn.config import load_client_config, load_server_config
 from rns_icn.client import ICNClient
+from rns_icn.config import load_client_config, load_server_config
 from rns_icn.rns_server import ICNServer
 
 

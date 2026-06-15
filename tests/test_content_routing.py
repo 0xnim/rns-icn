@@ -13,8 +13,8 @@ import asyncio
 import pytest
 
 from rns_icn.face import FaceId
-from rns_icn.name import Name, RNS_ADDR_BYTES
-from rns_icn.packet import Data, Interest, PacketType, parse_packet
+from rns_icn.name import RNS_ADDR_BYTES, Name
+from rns_icn.packet import Data, Interest, parse_packet
 from rns_icn.server import ICNServer
 
 
@@ -207,9 +207,6 @@ class TestInterestForwarding:
                 (server_b, rns_addr(0xAA), face_b_a.id()),
                 (server_c, rns_addr(0xAA), face_c_a.id()),
             ]:
-                peer_name = rns_addr(0xBB) if peer_addr == rns_addr(0xBB) else (
-                    rns_addr(0xCC) if peer_addr == rns_addr(0xCC) else rns_addr(0xAA)
-                )
                 from rns_icn.packet import PropPeer
                 peer = PropPeer(rns_addr=peer_addr, wants_sync=False)
                 await server.handle_incoming(face, peer.to_bytes())
@@ -305,7 +302,7 @@ class TestPitWaiterForward:
     @pytest.mark.asyncio
     async def test_forward_with_transport_loop(self):
         """Use TestFace with a transport loop to validate PIT waiter resolves."""
-        from rns_icn.face import TestFace, test_face_pair
+        from rns_icn.face import test_face_pair
         from rns_icn.forwarder import Forwarder
 
         fw = Forwarder()
@@ -321,8 +318,8 @@ class TestPitWaiterForward:
 
         async def transport():
             """Read Interest from downstream, serve from CS."""
-            # Wait for Interest bytes
-            interest_raw = await downstream_face._incoming.get()
+            # Wait for Interest bytes (consume from the queue; value unused)
+            await downstream_face._incoming.get()
             # Send Data back through the same face
             await downstream_face._outgoing.put(response_data.to_bytes())
 

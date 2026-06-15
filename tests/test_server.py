@@ -2,14 +2,12 @@
 Also tests for server role model.
 """
 
-import asyncio
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from rns_icn.rns_server import RNSICNServer
 from rns_icn.config import ServerConfig
-from rns_icn.name import Name
+from rns_icn.rns_server import RNSICNServer
 from rns_icn.server import ICNServer, ServerRole
 
 # Role-encoded app_data for an ORIGIN server

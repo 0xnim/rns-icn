@@ -16,8 +16,7 @@ import asyncio
 import pytest
 
 from rns_icn.aps import APSManager
-from rns_icn.face import FaceId, TestFace, test_face_pair
-from rns_icn.name import Name, RNS_ADDR_BYTES
+from rns_icn.name import RNS_ADDR_BYTES, Name
 from rns_icn.packet import (
     APSubscribe,
     Data,

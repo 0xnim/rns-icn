@@ -17,8 +17,6 @@ Usage:
 
 from __future__ import annotations
 
-from typing import Optional
-
 from .face import FaceId
 from .name import Name
 from .packet import Data

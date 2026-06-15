@@ -21,7 +21,7 @@ from rns_icn.manifest import (
     ManifestEntry,
     flatten_content_directory,
 )
-from rns_icn.name import Name, RNS_ADDR_BYTES
+from rns_icn.name import RNS_ADDR_BYTES, Name
 from rns_icn.packet import Data, PropPeer
 from rns_icn.propagation import PropagationManager
 from rns_icn.server import ICNServer
@@ -33,8 +33,6 @@ def rns_addr(byte_val: int = 0x01) -> bytes:
 
 def build_manifest_data(producer: bytes, entries: list[ManifestEntry]) -> Data:
     """Build a Data packet containing a manifest (helper for test setup)."""
-    import hashlib
-    import time
     manifest = Manifest.create(
         producer=producer,
         entries=entries,
@@ -215,7 +213,6 @@ class TestHierarchicalManifestE2E:
         # (simulates what would happen during peering sync)
         b_entries = server_b._build_manifest_entries()
         b_manifest_data = build_manifest_data(rns_addr(0xBB), b_entries)
-        b_manifest = Manifest.from_data(b_manifest_data)
 
         # Server A is a propagation/root with B's manifest cached
         server_a = ICNServer(rns_addr(0xAA))

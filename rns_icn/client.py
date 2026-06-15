@@ -11,14 +11,14 @@ from typing import Optional
 import RNS
 
 from .config import ClientConfig
-from .link_pool import LinkPool
-from .forwarder import Forwarder
 from .face import LinkFace
-from .name import Name
-from .packet import Interest, Data
-from .manifest import Manifest, ManifestEntry
+from .forwarder import Forwarder
 from .icn_logging import setup_logging
+from .link_pool import LinkPool
+from .manifest import Manifest, ManifestEntry
 from .metrics import metrics
+from .name import Name
+from .packet import Data, Interest
 
 
 class ICNClient:

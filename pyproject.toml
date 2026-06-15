@@ -12,6 +12,13 @@ dependencies = [
     "aiohttp>=3.9",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "ruff>=0.6",
+    "mypy>=1.11",
+]
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["rns_icn*"]
@@ -25,3 +32,23 @@ icn-fetch = "rns_icn.cli_fetch:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+# scripts/dev holds archived throwaway dev scripts — not linted.
+extend-exclude = ["scripts/dev"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+# E501 (line length): not worth reflowing the existing tree.
+# E741 (ambiguous name `l`): tolerated in test comprehensions.
+ignore = ["E501", "E741"]
+
+[tool.mypy]
+python_version = "3.10"
+# RNS and other deps ship without type stubs; don't fail on missing imports.
+ignore_missing_imports = true
+# The tree isn't fully annotated yet — mypy runs informationally in CI.
+warn_unused_ignores = false
+warn_return_any = false

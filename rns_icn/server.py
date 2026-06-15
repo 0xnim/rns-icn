@@ -13,7 +13,6 @@ from __future__ import annotations
 import asyncio
 import enum
 import hashlib
-import json
 import time
 from typing import Optional
 
@@ -25,10 +24,9 @@ from .forwarder import Forwarder
 from .manifest import EntryKind, Manifest, ManifestEntry
 from .name import Name
 from .offline_queue import OfflineQueue
-from .packet import APSubscribe, Data, Interest, PacketType, PropPeer, parse_packet
+from .packet import APSubscribe, Data, Interest, parse_packet
 from .pit import Pit
 from .propagation import PropagationManager
-from .strategy import BestRoute, Strategy
 
 _face_counter = 0
 
@@ -298,7 +296,7 @@ class ICNServer:
         """Handle a raw incoming packet from a Link."""
         try:
             pkt = parse_packet(raw)
-        except (ValueError, Exception) as e:
+        except (ValueError, Exception):
             # Silently drop invalid packets
             return
 

@@ -6,16 +6,13 @@ import argparse
 import asyncio
 import signal
 import sys
-from pathlib import Path
 
-from .config import load_client_config, load_server_config
 from .client import ICNClient
+from .config import load_client_config, load_server_config
+from .metrics import metrics
+from .name import Name
 from .rns_server import ICNServer
 from .server import ServerRole
-from .name import Name
-from .packet import Data, Interest
-from .health import is_health_interest
-from .metrics import metrics
 
 
 async def client_main() -> int:
@@ -88,7 +85,7 @@ async def server_main() -> int:
         except NotImplementedError:
             pass  # Windows
 
-    print(f"Starting ICN Server...")
+    print("Starting ICN Server...")
     print(f"  Identity: {config.identity_path}")
     print(f"  CS: {config.cs_path} (max {config.cs_max_entries}, TTL {config.cs_ttl_seconds}s)")
 
@@ -103,7 +100,9 @@ async def server_main() -> int:
         if config.http_enabled:
             from .health import setup_http_api
             from .metrics import metrics
-            runner = await setup_http_api(server, metrics, config.http_host, config.http_port)
+            # Held (not directly used) to keep the aiohttp runner alive for the
+            # server's lifetime; GC of the runner would tear down the HTTP API.
+            _runner = await setup_http_api(server, metrics, config.http_host, config.http_port)
             print(f"  HTTP API: http://{config.http_host}:{config.http_port} (health, metrics)")
 
         await stop_event.wait()
@@ -195,7 +194,9 @@ async def router_main() -> int:
 
         if config.http_enabled:
             from .health import setup_http_api
-            runner = await setup_http_api(server, metrics, config.http_host, config.http_port)
+            # Held (not directly used) to keep the aiohttp runner alive for the
+            # server's lifetime; GC of the runner would tear down the HTTP API.
+            _runner = await setup_http_api(server, metrics, config.http_host, config.http_port)
             print(f"  HTTP API: http://{config.http_host}:{config.http_port} (health, metrics)")
 
         await stop_event.wait()

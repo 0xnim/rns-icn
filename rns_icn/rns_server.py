@@ -18,33 +18,30 @@ from typing import Optional
 import RNS
 
 from .config import ServerConfig
-from .link_pool import LinkPool
 from .face import FaceId, LinkFace
+from .health import handle_health_interest, is_health_interest
+from .icn_logging import setup_logging
+from .link_pool import LinkPool
 from .manifest import EntryKind, Manifest, ManifestEntry
+from .metrics import metrics
 from .name import Name
 from .packet import (
-    CapPeer,
-    Data,
     FEATURE_APS,
     FEATURE_CHUNKED,
     FEATURE_MANIFEST,
     FEATURE_OFFLINE_QUEUE,
     FEATURE_PROPAGATION,
-    parse_packet,
+    CapPeer,
+    Data,
 )
 from .peer_discovery import PeerDiscoveryManager
 from .resource_transport import (
-    DEFAULT_RESOURCE_THRESHOLD,
     LargeContentPublisher,
     ResourceListener,
     ResourcePublisher,
-    ResourceTransportError,
 )
 from .rns_utils import load_or_create_identity
-from .server import ICNServer as BaseICNServer, ServerRole
-from .icn_logging import setup_logging
-from .metrics import metrics
-from .health import is_health_interest, handle_health_interest, setup_http_api
+from .server import ICNServer as BaseICNServer
 
 
 class ICNServer(BaseICNServer):
@@ -410,13 +407,13 @@ class ICNServer(BaseICNServer):
         features |= FEATURE_OFFLINE_QUEUE
         # Chunked content (if the chunker module is available)
         try:
-            from .chunker import chunk_content
+            from .chunker import chunk_content  # noqa: F401  (availability probe)
             features |= FEATURE_CHUNKED
         except ImportError:
             pass
         # Content propagation (if the propagation module is available)
         try:
-            from .propagation import PropagationManager
+            from .propagation import PropagationManager  # noqa: F401  (availability probe)
             features |= FEATURE_PROPAGATION
         except ImportError:
             pass

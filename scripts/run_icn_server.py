@@ -19,8 +19,8 @@ import signal
 import sys
 
 from rns_icn.config import ServerConfig
-from rns_icn.rns_server import ICNServer
 from rns_icn.name import Name
+from rns_icn.rns_server import ICNServer
 
 DEFAULT_IDENTITY = os.path.expanduser("~/.icn/server_identity")
 DEFAULT_CS = os.path.expanduser("~/.icn/server_cs.db")

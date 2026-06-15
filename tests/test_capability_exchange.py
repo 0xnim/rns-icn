@@ -14,7 +14,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from rns_icn.config import ServerConfig
-from rns_icn.packet import CapPeer, FEATURE_APS, FEATURE_MANIFEST, FEATURE_OFFLINE_QUEUE
+from rns_icn.packet import FEATURE_APS, FEATURE_MANIFEST, FEATURE_OFFLINE_QUEUE, CapPeer
 from rns_icn.rns_server import RNSICNServer
 
 

@@ -6,23 +6,21 @@ capability exchange on link establishment, and peer registry.
 
 from __future__ import annotations
 
-import asyncio
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
 from rns_icn.packet import (
-    CapPeer,
     FEATURE_APS,
     FEATURE_CHUNKED,
     FEATURE_MANIFEST,
     FEATURE_OFFLINE_QUEUE,
     FEATURE_PROPAGATION,
+    CapPeer,
     PacketType,
     parse_packet,
 )
 from rns_icn.peer_discovery import PeerDiscoveryManager, PeerInfo
-
 
 # ── CapPeer packet tests ──
 

@@ -14,18 +14,19 @@ import struct
 import tempfile
 
 import pytest
-from rns_icn.name import Name, RNS_ADDR_BYTES
-from rns_icn.packet import Data, DataMetadata
+
+from rns_icn.name import RNS_ADDR_BYTES, Name
+from rns_icn.packet import Data
 from rns_icn.resource_transport import (
     DEFAULT_RESOURCE_THRESHOLD,
-    ResourceTransportError,
-    ResourceTimeoutError,
-    ResourcePublisher,
-    ResourceListener,
-    LargeContentPublisher,
-    _wrap_payload,
-    _unwrap_payload,
     RESOURCE_TYPE_ICN_DATA,
+    LargeContentPublisher,
+    ResourceListener,
+    ResourcePublisher,
+    ResourceTimeoutError,
+    ResourceTransportError,
+    _unwrap_payload,
+    _wrap_payload,
 )
 
 
@@ -411,8 +412,8 @@ class TestLargeContentPublisherIntegration:
         Verifies the threshold property and that data are publishable.
         """
         import RNS
+
         from rns_icn.chunker import chunk_content
-        from rns_icn.assembler import assemble
 
         RNS.log_level = RNS.LOG_ERROR
         identity_a = RNS.Identity()
@@ -440,7 +441,6 @@ class TestLargeContentPublisherIntegration:
             nonlocal link_a
             link_a = link
             listener = ResourceListener(link)
-            from rns_icn.manifest import ContentManifest
 
             def on_data(data: Data):
                 received_packets[str(data.name)] = data

@@ -11,9 +11,8 @@ from dataclasses import dataclass
 from typing import Optional
 
 from .manifest import ChunkRef, ContentManifest
-from .name import Name, CONTENT_HASH_BYTES
+from .name import Name
 from .packet import Data
-
 
 DEFAULT_CHUNK_SIZE = 64 * 1024  # 64 KB
 CHUNK_LABEL_PAD = 4  # zero-padded width for chunk indices

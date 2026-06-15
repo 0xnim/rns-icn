@@ -1,21 +1,21 @@
 """Tests for ICN observability — logging, health, metrics."""
 
 import asyncio
-import json
 from pathlib import Path
 
 import pytest
 from aiohttp import web
-from aiohttp.test_utils import TestServer, TestClient
+from aiohttp.test_utils import TestClient, TestServer
 
-from rns_icn.config import load_client_config, load_server_config
-from rns_icn.client import ICNClient
-from rns_icn.rns_server import ICNServer
-from rns_icn.metrics import metrics
-from rns_icn.health import is_health_interest, health_handler, metrics_handler, setup_http_api
 from rns_icn.content_store import ContentStore
+from rns_icn.health import (
+    health_handler,
+    is_health_interest,
+    metrics_handler,
+)
+from rns_icn.metrics import metrics
 from rns_icn.name import Name
-from rns_icn.packet import Data, Interest
+from rns_icn.packet import Data
 
 
 def test_name_from_string():
@@ -144,7 +144,6 @@ async def test_http_health_endpoint():
 async def test_content_store_persistence():
     """Test SQLite ContentStore persistence across restarts."""
     import tempfile
-    import os
 
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "test_cs.db"

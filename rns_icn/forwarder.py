@@ -13,8 +13,8 @@ from typing import Optional
 from .content_store import ContentStore
 from .face import Face, FaceId
 from .fib import Fib
-from .packet import Data, Interest, InterestSelector
 from .name import Name
+from .packet import Data, Interest, InterestSelector
 from .pit import Pit
 from .strategy import BestRoute, Strategy, StrategyDecision
 

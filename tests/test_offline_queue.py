@@ -13,9 +13,7 @@ import time
 
 import pytest
 
-from rns_icn.aps import APSManager
-from rns_icn.face import FaceId
-from rns_icn.name import Name, RNS_ADDR_BYTES
+from rns_icn.name import RNS_ADDR_BYTES, Name
 from rns_icn.offline_queue import OfflineQueue
 from rns_icn.packet import APSubscribe, Data
 from rns_icn.server import ICNServer

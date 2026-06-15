@@ -9,9 +9,9 @@ import tempfile
 import RNS
 
 from rns_icn.config import ServerConfig
-from rns_icn.rns_server import ICNServer
 from rns_icn.name import Name
 from rns_icn.packet import Interest
+from rns_icn.rns_server import ICNServer
 
 try:
     from rns_icn.manifest import Manifest
@@ -56,7 +56,7 @@ def main():
 
 
 async def _fetch(peer_hash: str, name_str: str, output_path: str):
-    print(f"[fetch] Initializing RNS...", file=sys.stderr)
+    print("[fetch] Initializing RNS...", file=sys.stderr)
 
     peer_addr_raw = bytes.fromhex(peer_hash)
     server = ICNServer(_ephemeral_config())
@@ -67,7 +67,7 @@ async def _fetch(peer_hash: str, name_str: str, output_path: str):
 
     # Wait for a path to the peer (request + poll) so its identity can be
     # recalled and a Link established.
-    print(f"[fetch] Waiting for path to peer...", file=sys.stderr)
+    print("[fetch] Waiting for path to peer...", file=sys.stderr)
     for attempt in range(24):  # up to 2 minutes
         if RNS.Transport.has_path(peer_addr_raw):
             hops = RNS.Transport.hops_to(peer_addr_raw)
@@ -76,7 +76,7 @@ async def _fetch(peer_hash: str, name_str: str, output_path: str):
         RNS.Transport.request_path(peer_addr_raw)
         await asyncio.sleep(5)
     else:
-        print(f"[fetch] WARNING: path not found after 2min, trying anyway...", file=sys.stderr)
+        print("[fetch] WARNING: path not found after 2min, trying anyway...", file=sys.stderr)
 
     print(f"[fetch] Connecting to peer: {peer_hash}", file=sys.stderr)
 

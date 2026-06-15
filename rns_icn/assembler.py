@@ -8,7 +8,6 @@ manifest, and optionally verifies the overall content hash.
 from __future__ import annotations
 
 import hashlib
-from typing import Optional
 
 from .manifest import ChunkRef, ContentManifest
 from .packet import Data

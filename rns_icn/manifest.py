@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
 
-from .name import Name, RNS_ADDR_BYTES
+from .name import RNS_ADDR_BYTES, Name
 from .packet import Data
 
 
