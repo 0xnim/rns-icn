@@ -137,14 +137,9 @@ class ICNServer(BaseICNServer):
         # Track start time for uptime metrics
         self._started_at = time.time()
 
-        # Initialize RNS if not already started
-        try:
-            reticulum = RNS.Reticulum()
-            if reticulum is None:
-                RNS.Reticulum()
-                self._started_rns = True
-        except Exception:
-            # RNS not initialized, create it
+        # Initialize RNS only if not already running (it's a process-global singleton;
+        # calling RNS.Reticulum() when one exists raises "Attempt to reinitialise").
+        if RNS.Reticulum.get_instance() is None:
             RNS.Reticulum()
             self._started_rns = True
 
@@ -525,3 +520,7 @@ class ICNServer(BaseICNServer):
 
     def __str__(self) -> str:
         return f"ICNServer({self.identity})"
+
+
+# Backward-compatible alias: this class was renamed from RNSICNServer to ICNServer.
+RNSICNServer = ICNServer

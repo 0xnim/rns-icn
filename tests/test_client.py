@@ -105,12 +105,15 @@ async def test_server_lifecycle():
     with tempfile.TemporaryDirectory() as tmpdir:
         identity_path = Path(tmpdir) / "test_server_identity"
 
-        # Generate a test identity
+        # Generate a test identity. RNS.Reticulum() is a process-global singleton:
+        # only initialise it if one isn't already running (another test may have
+        # started it), and leave it up so the server's start() reuses the instance —
+        # exiting + reinitialising in the same process raises "Attempt to reinitialise".
         import RNS
-        RNS.Reticulum()
+        if RNS.Reticulum.get_instance() is None:
+            RNS.Reticulum()
         identity = RNS.Identity()
         identity.to_file(str(identity_path))
-        RNS.Reticulum().exit()
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".toml", delete=False) as f:
             f.write(f"""

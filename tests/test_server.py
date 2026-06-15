@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from rns_icn.rns_server import RNSICNServer
+from rns_icn.config import ServerConfig
 from rns_icn.name import Name
 from rns_icn.server import ICNServer, ServerRole
 
@@ -24,6 +25,23 @@ def _make_mock_identity(prefix_byte: int):
     mock_id.hexhash = f"{prefix_byte:02x}" + "00" * 15
     return mock_id
 
+
+def _cfg(aspect: str = "test", role: ServerRole = ServerRole.ORIGIN) -> ServerConfig:
+    """Minimal in-memory ServerConfig for tests."""
+    return ServerConfig(
+        identity_path="/unused",
+        app_name="icn",
+        aspect=aspect,
+        cs_path=":memory:",
+        role=role,
+    )
+
+
+async def _start(server):
+    """Start a server with peer discovery stubbed out (no real RNS traffic)."""
+    server.discovery = MagicMock()
+    await server.start()
+
 def _make_mock_dest(prefix_byte: int):
     """Create a mocked RNS.Destination."""
     mock_dest = MagicMock()
@@ -35,42 +53,38 @@ def _make_mock_dest(prefix_byte: int):
 async def test_announce_called_on_start():
     """Server calls destination.announce() during start()."""
     with (
-        patch("RNS.Identity") as mock_identity,
+        patch("rns_icn.rns_server.load_or_create_identity", return_value=_make_mock_identity(0x01)),
+        patch("RNS.Reticulum"),
         patch("RNS.Destination") as mock_dest_class,
     ):
-        mock_identity.return_value.hash = b"\x01" + b"\x00" * 15
-        mock_identity.return_value.hexhash = "01" + "00" * 15
-
         mock_dest = MagicMock()
         mock_dest.hexhash = "01" + "00" * 15
         mock_dest_class.return_value = mock_dest
 
-        server = RNSICNServer(app_name="icn", aspect="test")
-        server.start()
+        server = RNSICNServer(_cfg())
+        await _start(server)
 
         mock_dest_class.assert_called_once()
         mock_dest.announce.assert_called_once_with(app_data=_ORIGIN_APP_DATA)
         mock_dest.set_link_established_callback.assert_called_once()
 
-        server.stop()
+        await server.shutdown()
 
 
 @pytest.mark.asyncio
 async def test_announce_public_method():
     """Public announce() method calls destination.announce()."""
     with (
-        patch("RNS.Identity") as mock_identity,
+        patch("rns_icn.rns_server.load_or_create_identity", return_value=_make_mock_identity(0x02)),
+        patch("RNS.Reticulum"),
         patch("RNS.Destination") as mock_dest_class,
     ):
-        mock_identity.return_value.hash = b"\x02" + b"\x00" * 15
-        mock_identity.return_value.hexhash = "02" + "00" * 15
-
         mock_dest = MagicMock()
         mock_dest.hexhash = "02" + "00" * 15
         mock_dest_class.return_value = mock_dest
 
-        server = RNSICNServer(app_name="icn", aspect="test")
-        server.start()
+        server = RNSICNServer(_cfg())
+        await _start(server)
 
         mock_dest.announce.reset_mock()
 
@@ -78,47 +92,41 @@ async def test_announce_public_method():
 
         mock_dest.announce.assert_called_once_with(app_data=b"test-data")
 
-        server.stop()
+        await server.shutdown()
 
 
 @pytest.mark.asyncio
 async def test_announce_loop_cancelled_on_stop():
     """Periodic announce loop is cancelled when server stops."""
     with (
-        patch("RNS.Identity") as mock_identity,
+        patch("rns_icn.rns_server.load_or_create_identity", return_value=_make_mock_identity(0x03)),
+        patch("RNS.Reticulum"),
         patch("RNS.Destination") as mock_dest_class,
     ):
-        mock_identity.return_value.hash = b"\x03" + b"\x00" * 15
-        mock_identity.return_value.hexhash = "03" + "00" * 15
-
         mock_dest = MagicMock()
         mock_dest.hexhash = "03" + "00" * 15
         mock_dest_class.return_value = mock_dest
 
-        server = RNSICNServer(
-            app_name="icn", aspect="test",
-        )
+        server = RNSICNServer(_cfg())
         server._announce_interval = 0.1
-        server.start()
+        await _start(server)
 
         assert server._announce_task is not None
         assert not server._announce_task.done()
 
-        server.stop()
+        await server.shutdown()
 
         task = server._announce_task
         assert task is None or task.cancelled()
 
 
-def test_announce_errors_before_start():
+@pytest.mark.asyncio
+async def test_announce_errors_before_start():
     """announce() raises RuntimeError if called before start()."""
     with (
-        patch("RNS.Identity") as mock_identity,
+        patch("rns_icn.rns_server.load_or_create_identity", return_value=_make_mock_identity(0x04)),
     ):
-        mock_identity.return_value.hash = b"\x04" + b"\x00" * 15
-        mock_identity.return_value.hexhash = "04" + "00" * 15
-
-        server = RNSICNServer(app_name="icn", aspect="test")
+        server = RNSICNServer(_cfg())
         with pytest.raises(RuntimeError, match="not started"):
             server.announce()
 
@@ -127,18 +135,16 @@ def test_announce_errors_before_start():
 async def test_announce_default_app_data():
     """announce() uses role-encoded app_data as default."""
     with (
-        patch("RNS.Identity") as mock_identity,
+        patch("rns_icn.rns_server.load_or_create_identity", return_value=_make_mock_identity(0x05)),
+        patch("RNS.Reticulum"),
         patch("RNS.Destination") as mock_dest_class,
     ):
-        mock_identity.return_value.hash = b"\x05" + b"\x00" * 15
-        mock_identity.return_value.hexhash = "05" + "00" * 15
-
         mock_dest = MagicMock()
         mock_dest.hexhash = "05" + "00" * 15
         mock_dest_class.return_value = mock_dest
 
-        server = RNSICNServer(app_name="icn", aspect="test")
-        server.start()
+        server = RNSICNServer(_cfg())
+        await _start(server)
 
         mock_dest.announce.reset_mock()
 
@@ -146,7 +152,7 @@ async def test_announce_default_app_data():
 
         mock_dest.announce.assert_called_once_with(app_data=_ORIGIN_APP_DATA)
 
-        server.stop()
+        await server.shutdown()
 
 
 # ── ServerRole model tests ──
@@ -227,41 +233,35 @@ def test_icn_app_data_propagation():
 async def test_rns_server_announce_with_cache_role():
     """RNSICNServer with CACHE role announces with \\x01 byte."""
     with (
-        patch("RNS.Identity") as mock_identity,
+        patch("rns_icn.rns_server.load_or_create_identity", return_value=_make_mock_identity(0x11)),
+        patch("RNS.Reticulum"),
         patch("RNS.Destination") as mock_dest_class,
     ):
-        mock_identity.return_value.hash = b"\x11" + b"\x00" * 15
-        mock_identity.return_value.hexhash = "11" + "00" * 15
-
         mock_dest = MagicMock()
         mock_dest.hexhash = "11" + "00" * 15
         mock_dest_class.return_value = mock_dest
 
-        server = RNSICNServer(app_name="icn", aspect="cache-test")
-        server.role = ServerRole.CACHE
-        server.start()
+        server = RNSICNServer(_cfg(aspect="cache-test", role=ServerRole.CACHE))
+        await _start(server)
 
         mock_dest.announce.assert_called_once_with(app_data=_CACHE_APP_DATA)
-        server.stop()
+        await server.shutdown()
 
 
 @pytest.mark.asyncio
 async def test_rns_server_announce_with_propagation_role():
     """RNSICNServer with PROPAGATION role announces with \\x02 byte."""
     with (
-        patch("RNS.Identity") as mock_identity,
+        patch("rns_icn.rns_server.load_or_create_identity", return_value=_make_mock_identity(0x12)),
+        patch("RNS.Reticulum"),
         patch("RNS.Destination") as mock_dest_class,
     ):
-        mock_identity.return_value.hash = b"\x12" + b"\x00" * 15
-        mock_identity.return_value.hexhash = "12" + "00" * 15
-
         mock_dest = MagicMock()
         mock_dest.hexhash = "12" + "00" * 15
         mock_dest_class.return_value = mock_dest
 
-        server = RNSICNServer(app_name="icn", aspect="prop-test")
-        server.role = ServerRole.PROPAGATION
-        server.start()
+        server = RNSICNServer(_cfg(aspect="prop-test", role=ServerRole.PROPAGATION))
+        await _start(server)
 
         mock_dest.announce.assert_called_once_with(app_data=_PROP_APP_DATA)
-        server.stop()
+        await server.shutdown()

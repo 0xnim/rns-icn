@@ -85,19 +85,19 @@ class TestName:
 
 class TestContentStore:
     def test_insert_and_get(self):
-        cs = ContentStore(10)
+        cs = ContentStore(max_entries=10)
         name = Name(rns_addr(0x01), [b"test"])
         cs.insert(name, make_data(name))
         assert cs.get(name) is not None
         assert len(cs) == 1
 
     def test_miss(self):
-        cs = ContentStore(10)
+        cs = ContentStore(max_entries=10)
         assert cs.get(Name(rns_addr(0x01), [b"x"])) is None
         assert cs.misses == 1
 
     def test_lru_eviction(self):
-        cs = ContentStore(2)
+        cs = ContentStore(max_entries=2)
         a = Name(rns_addr(0x01), [b"a"])
         b = Name(rns_addr(0x02), [b"b"])
         c = Name(rns_addr(0x03), [b"c"])
@@ -108,26 +108,30 @@ class TestContentStore:
         assert not cs.contains(a)
 
     def test_prefix_match(self):
-        cs = ContentStore(10)
+        # CanBePrefix: an Interest for /app matches more-specific stored Data /app/chat.
+        cs = ContentStore(max_entries=10)
         prefix = Name(rns_addr(0x01), [b"app"])
         full = Name(rns_addr(0x01), [b"app", b"chat"])
-        cs.insert(prefix, make_data(prefix))
-        result = cs.get_prefix(full)
+        cs.insert(full, make_data(full))
+        result = cs.get_prefix(prefix)
         assert result is not None
+        assert result.name == full
 
-    def test_prefix_match_longest(self):
-        cs = ContentStore(10)
-        short = Name(rns_addr(0x01), [b"app"])
-        long = Name(rns_addr(0x01), [b"app", b"chat"])
-        query = Name(rns_addr(0x01), [b"app", b"chat", b"v5"])
-        cs.insert(short, make_data(short))
-        cs.insert(long, make_data(long))
-        result = cs.get_prefix(query)
+    def test_prefix_match_returns_data_under_prefix(self):
+        # get_prefix returns one of the Data items stored under the query prefix.
+        cs = ContentStore(max_entries=10)
+        prefix = Name(rns_addr(0x01), [b"app"])
+        a = Name(rns_addr(0x01), [b"app", b"chat", b"v1"])
+        b = Name(rns_addr(0x01), [b"app", b"chat", b"v2"])
+        cs.insert(a, make_data(a))
+        cs.insert(b, make_data(b))
+        result = cs.get_prefix(prefix)
         assert result is not None
-        assert result.name == long
+        assert result.name in (a, b)
+        assert prefix.is_prefix_of(result.name)
 
     def test_hits_misses(self):
-        cs = ContentStore(10)
+        cs = ContentStore(max_entries=10)
         name = Name(rns_addr(0x01), [b"test"])
         cs.insert(name, make_data(name))
         cs.get(name)

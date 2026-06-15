@@ -13,6 +13,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from rns_icn.config import ServerConfig
 from rns_icn.packet import CapPeer, FEATURE_APS, FEATURE_MANIFEST, FEATURE_OFFLINE_QUEUE
 from rns_icn.rns_server import RNSICNServer
 
@@ -26,28 +27,27 @@ def _make_mock_identity(byte_val: int):
 
 @pytest.fixture
 def make_server():
-    """Factory fixture for a minimal mock RNSICNServer."""
-    servers = []
+    """Factory fixture for a minimal mock RNSICNServer (constructed, not started)."""
 
     def _make(byte_val=0x0A):
         identity = _make_mock_identity(byte_val)
         with (
-            patch("RNS.Identity", return_value=identity),
+            patch("rns_icn.rns_server.load_or_create_identity", return_value=identity),
             patch("RNS.Destination"),
             patch("RNS.log"),
             patch("RNS.Transport"),
         ):
-            server = RNSICNServer(app_name="icn", aspect="test")
+            cfg = ServerConfig(
+                identity_path="/unused",
+                app_name="icn",
+                aspect="test",
+                cs_path=":memory:",
+            )
+            server = RNSICNServer(cfg)
             server._loop = asyncio.get_running_loop()
-            servers.append(server)
             return server
 
-    yield _make
-    for s in servers:
-        try:
-            s.stop()
-        except Exception:
-            pass
+    return _make
 
 
 @pytest.mark.asyncio

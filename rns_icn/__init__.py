@@ -50,7 +50,7 @@ from .pit import Pit, PitEntry, PitOp
 from .content_store import ContentStore
 from .strategy import Strategy, StrategyDecision, BestRoute
 from .aps import APSManager
-# from .propagation import PropagationManager, PropagationError  # TODO: uncomment when propagation module exists
+from .propagation import PropagationManager, PropagationError
 from .forwarder import Forwarder
 from .server import ICNServer, ServerRole
 from .rns_server import ICNServer as RNSICNServer

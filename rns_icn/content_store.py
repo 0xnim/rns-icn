@@ -354,6 +354,11 @@ class ContentStore:
     def capacity(self) -> int:
         return self._max
 
+    def __len__(self) -> int:
+        """Number of entries currently stored."""
+        row = self._conn.execute("SELECT COUNT(*) FROM content").fetchone()
+        return row[0] if row else 0
+
     @property
     def size_bytes(self) -> int:
         row = self._conn.execute("SELECT COALESCE(SUM(size_bytes), 0) FROM content").fetchone()
