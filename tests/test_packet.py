@@ -66,6 +66,58 @@ class TestInterest:
         assert cloned.must_be_fresh is True
         assert cloned.lifetime_ms == 5000
 
+    def test_hop_limit_default(self):
+        from rns_icn.packet import DEFAULT_HOP_LIMIT
+        interest = Interest(name=Name(rns_addr(0x01), [b"t"]))
+        assert interest.hop_limit == DEFAULT_HOP_LIMIT
+
+    def test_hop_limit_round_trip(self):
+        name = Name(rns_addr(0x01), [b"test"])
+        interest = Interest(name=name, hop_limit=3)
+        parsed = Interest.from_bytes(interest.to_bytes())
+        assert parsed.hop_limit == 3
+
+    def test_hop_limit_round_trip_with_selector(self):
+        # hop_limit is serialized after the selector — both must survive together.
+        name = Name(rns_addr(0x01), [b"test"])
+        interest = Interest(
+            name=name, hop_limit=7, selector=InterestSelector(min_sequence=9)
+        )
+        parsed = Interest.from_bytes(interest.to_bytes())
+        assert parsed.hop_limit == 7
+        assert parsed.selector is not None
+        assert parsed.selector.min_sequence == 9
+
+    def test_hop_limit_zero_round_trip(self):
+        name = Name(rns_addr(0x01), [b"test"])
+        parsed = Interest.from_bytes(Interest(name=name, hop_limit=0).to_bytes())
+        assert parsed.hop_limit == 0
+
+    def test_hop_limit_clone(self):
+        interest = Interest(name=Name(rns_addr(0x01), [b"t"]), hop_limit=5)
+        assert interest.clone().hop_limit == 5
+
+    def test_hop_limit_with_method(self):
+        interest = Interest(name=Name(rns_addr(0x01), [b"t"])).with_hop_limit(4)
+        assert interest.hop_limit == 4
+
+    def test_hop_limit_out_of_range(self):
+        with pytest.raises(InterestError):
+            Interest(name=Name(rns_addr(0x01), [b"t"]), hop_limit=256)
+
+    def test_hop_limit_absent_defaults(self):
+        # Wire bytes from an older peer that predates the hop_limit flag:
+        # build a normal Interest, then clear flag bit 3 and drop the trailing
+        # hop_limit byte. The parser must fall back to DEFAULT_HOP_LIMIT.
+        from rns_icn.packet import DEFAULT_HOP_LIMIT
+        name = Name(rns_addr(0x01), [b"test"])
+        raw = bytearray(Interest(name=name).to_bytes())
+        assert raw[-2] & 0x08  # flags byte has hop_limit bit set
+        raw[-2] &= ~0x08       # clear has_hop_limit
+        legacy = bytes(raw[:-1])  # strip trailing hop_limit byte
+        parsed = Interest.from_bytes(legacy)
+        assert parsed.hop_limit == DEFAULT_HOP_LIMIT
+
     def test_packet_type_byte(self):
         name = Name(rns_addr(0x01), [b"test"])
         interest = Interest(name=name)

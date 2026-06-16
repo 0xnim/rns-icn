@@ -99,7 +99,7 @@ class ICNServer:
         self.aps = APSManager(self)
         self.propagation = PropagationManager(self)
         self._next_face_id: FaceId = 100
-        self._faces: dict[FaceId, _ServerFace] = {}
+        self._faces: dict[FaceId, Face] = {}
         self._face_send_queues: dict[FaceId, asyncio.Queue] = {}
 
     def _icn_app_data(self) -> bytes:

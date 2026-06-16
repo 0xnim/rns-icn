@@ -121,7 +121,7 @@ def test_face_pair() -> tuple[TestFace, TestFace]:
 
 
 # Not a pytest test despite the test_ prefix — it's a connected-pair factory.
-test_face_pair.__test__ = False
+setattr(test_face_pair, "__test__", False)
 
 
 # ── LinkFace: Face over RNS Link with Channel ──
@@ -145,7 +145,7 @@ class LinkFace(Face):
             """Channel message wrapping raw ICN Interest/Data bytes."""
             MSGTYPE = 0x01
 
-            def __init__(self, raw: bytes = None):
+            def __init__(self, raw: Optional[bytes] = None):
                 self.raw = raw if raw is not None else b""
 
             def pack(self) -> bytes:

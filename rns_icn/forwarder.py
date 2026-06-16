@@ -28,6 +28,11 @@ class Forwarder:
         self._faces: dict[FaceId, Face] = {}
         self._pit_notifiers: dict[Name, list[asyncio.Future]] = {}
 
+    @property
+    def faces(self) -> dict[FaceId, Face]:
+        """Registered faces keyed by face id (read access for callers)."""
+        return self._faces
+
     def register_face(self, face: Face) -> None:
         self._faces[face.id()] = face
 
@@ -80,6 +85,14 @@ class Forwarder:
     async def _forward(self, interest: Interest, in_face: FaceId,
                        out_face_id: FaceId) -> Optional[Data]:
         name = interest.name
+
+        # Hop-limit enforcement (defence-in-depth beyond nonce loop detection).
+        # An exhausted Interest is dropped rather than forwarded; CS/PIT
+        # satisfaction already happened in express() before we got here.
+        if interest.hop_limit <= 0:
+            return None
+        interest.hop_limit -= 1
+
         self.pit.insert_or_aggregate(name, in_face, interest, interest.lifetime_ms)
         self.pit.set_out_face(name, out_face_id)
 

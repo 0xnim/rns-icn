@@ -17,9 +17,14 @@ Usage:
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Optional
+
 from .face import FaceId
 from .name import Name
 from .packet import Data
+
+if TYPE_CHECKING:
+    from .server import ICNServer
 
 
 class APSManager:
@@ -30,7 +35,7 @@ class APSManager:
     faces subscribed to that stream (or any prefix of it).
     """
 
-    def __init__(self, server: "ICNServer" = None):  # noqa: F821
+    def __init__(self, server: Optional["ICNServer"] = None):
         self._server = server
         self._subscriptions: dict[Name, set[FaceId]] = {}
 

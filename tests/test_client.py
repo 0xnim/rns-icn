@@ -142,6 +142,68 @@ announce_interval = 30.0
             Path(path).unlink()
 
 
+class _FakeChannel:
+    """Minimal stand-in for RNS.Channel used by LinkFace construction."""
+
+    def register_message_type(self, msgtype):
+        pass
+
+    def add_message_handler(self, handler):
+        pass
+
+    def send(self, message):
+        pass
+
+
+class _FakeLink:
+    """Minimal stand-in for RNS.Link so LinkFace can be constructed in-process."""
+
+    def __init__(self):
+        self.mdu = 500
+
+    def get_channel(self):
+        return _FakeChannel()
+
+    def set_link_closed_callback(self, cb):
+        pass
+
+
+@pytest.mark.asyncio
+async def test_get_or_create_face_id_creates_and_reuses_faces():
+    """_get_or_create_face_id registers a face per link and reuses it.
+
+    Regression test: this path previously referenced a non-existent
+    `Forwarder.faces` attribute and raised AttributeError on every fetch.
+    """
+    from rns_icn.config import ClientConfig
+    from rns_icn.forwarder import Forwarder
+
+    client = ICNClient(ClientConfig())
+    client._forwarder = Forwarder()  # simulate start() without RNS/link pool
+
+    link = _FakeLink()
+    fid = client._get_or_create_face_id(link)
+    assert fid in client.forwarder.faces
+
+    # Same link → same face, no duplicate registration.
+    assert client._get_or_create_face_id(link) == fid
+    assert len(client.forwarder.faces) == 1
+
+    # Different link → distinct face.
+    fid2 = client._get_or_create_face_id(_FakeLink())
+    assert fid2 != fid
+    assert len(client.forwarder.faces) == 2
+
+
+def test_get_or_create_face_id_requires_forwarder():
+    """Calling before start() raises a clear error, not AttributeError."""
+    from rns_icn.config import ClientConfig
+
+    client = ICNClient(ClientConfig())
+    with pytest.raises(RuntimeError, match="Forwarder not initialized"):
+        client._get_or_create_face_id(_FakeLink())
+
+
 if __name__ == "__main__":
     # Run tests manually without pytest
     test_load_client_config()

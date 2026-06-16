@@ -9,14 +9,10 @@ import tempfile
 import RNS
 
 from rns_icn.config import ServerConfig
+from rns_icn.manifest import Manifest
 from rns_icn.name import Name
 from rns_icn.packet import Interest
 from rns_icn.rns_server import ICNServer
-
-try:
-    from rns_icn.manifest import Manifest
-except ImportError:
-    Manifest = None
 
 
 def _ephemeral_config() -> ServerConfig:

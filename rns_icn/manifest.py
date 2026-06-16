@@ -159,7 +159,7 @@ class ManifestEntry:
     end_time: Optional[int] = None     # Unix timestamp of last item
 
     def to_dict(self) -> dict:
-        d = {"kind": self.kind.value, "label": self.label, "name": str(self.name)}
+        d: dict[str, object] = {"kind": self.kind.value, "label": self.label, "name": str(self.name)}
         if self.content_hash is not None:
             d["content_hash"] = self.content_hash.hex()
         if self.size is not None:

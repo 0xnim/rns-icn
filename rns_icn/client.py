@@ -92,6 +92,8 @@ class ICNClient:
         max_retries: Optional[int] = None,
     ) -> Optional[Data]:
         """Express Interest to peer, wait for Data with retry/backoff."""
+        if self._link_pool is None or self._forwarder is None:
+            raise RuntimeError("Client not started. Call start() or use as context manager.")
         timeout = timeout or self.config.fetch_timeout
         max_retries = max_retries if max_retries is not None else self.config.max_retries
         base_delay = self.config.base_retry_delay
