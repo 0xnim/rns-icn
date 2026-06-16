@@ -8,7 +8,7 @@
 
 ## Current State
 
-Phases 1 and 2 are complete; parts of Phase 4 (capability negotiation, pub/sub, chunked transfer) landed early. Phase 3.1/3.2 (signed manifests + per-packet producer signatures) is now implemented; access control (3.3) and name resolution (3.4) remain.
+Phases 1 and 2 are complete; parts of Phase 4 (capability negotiation, pub/sub, chunked transfer) landed early. Phase 3.1 (signed manifests, authenticated sequence/timestamp, key rotation) and 3.2 (per-packet/per-chunk producer signatures) are now implemented; access control (3.3) and name resolution (3.4) remain.
 
 | Component | Status | Gaps |
 |-----------|--------|------|
@@ -16,7 +16,7 @@ Phases 1 and 2 are complete; parts of Phase 4 (capability negotiation, pub/sub, 
 | Link establishment | `LinkPool` w/ reuse, health, announce injection | reconnect is on-use, not proactive |
 | Content store | SQLite + TTL + LRU + crash recovery | — |
 | Forwarding | Multi-hop (FIB/PIT/CS); `icn-router` binary; **cache coherency** (freshness period, stale-while-revalidate, signed invalidation) | no multi-path |
-| Naming | /hash/label, content-hash verified, **Ed25519 producer signatures** (sequence + timestamp authenticated; client rollback protection) | access control + name resolution (Phase 3.3/3.4) |
+| Naming | /hash/label, content-hash verified, **Ed25519 producer signatures** (sequence + timestamp authenticated; client rollback protection; **key rotation** via signed delegation chains) | access control + name resolution (Phase 3.3/3.4) |
 | API | Versioned via capability exchange | per-packet version not in Interest/Data |
 | Operations | TOML config, JSON logs, health + metrics | — |
 
@@ -101,7 +101,19 @@ Phases 1 and 2 are complete; parts of Phase 4 (capability negotiation, pub/sub, 
 - [x] Producer keypair (Ed25519) — the producer's RNS identity (`name.rns_addr` is its address)
 - [x] Manifest signing (`ICNServer._maybe_sign` signs origin-owned Data incl. manifests; signs over `name + content + content_hash`)
 - [x] Client validation (`ICNClient._check_signature` recalls producer via `RNS.Identity.recall`, `verify-if-present` + `require_signature` strict mode)
-- [ ] Key rotation support
+- [x] Key rotation support (`rns_icn/rotation.py`): a producer issues a signed
+  chain of `KeyRotation` certificates (anchor key → new key → …), each binding
+  the namespace, a monotonic epoch, and the prev/new public keys. Verification
+  is self-certifying and offline — an RNS identity hash *is* the truncated hash
+  of its public key, so the chain anchors by checking the root key hashes to
+  `name.rns_addr` (no recall of the retired key needed). A valid chain widens
+  the set of keys authorized to sign for the namespace; `ICNClient` loads chains
+  from `config.rotation_chains` and `_check_signature` accepts any authorized
+  key, and an origin can sign with a delegated key via
+  `ServerConfig.signing_identity_path` while keeping its anchor namespace.
+  Delivered as key *continuity* (old generations still verify, caches survive a
+  rotation); chain distribution over the mesh and *revocation* are deferred to
+  §3.4.
 - [x] Sequence/timestamp inside the signed envelope: `signed_hash` now binds
   `name + content + content_hash + sequence + signed_at` (the latter two
   domain-tagged and appended, so pre-3.1 signatures still verify). `Data.sign`
@@ -124,7 +136,9 @@ Phases 1 and 2 are complete; parts of Phase 4 (capability negotiation, pub/sub, 
 ### 3.4 Name Resolution
 - [ ] Human-readable names → producer hash (Petname / DNS-like)
 - [ ] Trust-on-first-use (TOFU) for producers
-- [ ] Revocation / key expiry
+- [ ] Revocation / key expiry (key *rotation* landed in §3.1; revocation —
+  shrinking the authorized-key set when a key is compromised — and mesh
+  distribution of rotation chains belong here)
 
 **Deliverable:** Signed manifests + data, producer auth, encrypted content option, name resolution.
 

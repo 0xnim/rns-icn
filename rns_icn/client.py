@@ -10,6 +10,7 @@ from typing import Optional
 
 import RNS
 
+from . import rotation
 from .config import ClientConfig
 from .face import LinkFace
 from .forwarder import Forwarder
@@ -38,6 +39,9 @@ class ICNClient:
         # name → highest authenticated (signed_at, sequence) accepted so far,
         # used for rollback detection when config.reject_rollback is set.
         self._seen_signed_key: dict[bytes, tuple[int, int]] = {}
+        # producer addr → its key-rotation chain (rns_icn.rotation), loaded from
+        # config.rotation_chains at start(); empty means "no rotation known".
+        self._rotation_store: dict[bytes, list[rotation.KeyRotation]] = {}
 
     async def __aenter__(self) -> "ICNClient":
         return await self.start()
@@ -78,7 +82,28 @@ class ICNClient:
         )
         await self._link_pool.start()
 
+        self._load_rotation_chains()
+
         return self
+
+    def _load_rotation_chains(self) -> None:
+        """Load and validate configured key-rotation chains, keyed by producer.
+
+        Each file's anchor (the first link's signer key) determines the producer
+        address it applies to. A malformed or unverifiable chain is skipped with
+        a warning rather than failing startup.
+        """
+        for path in self.config.rotation_chains:
+            try:
+                certs = rotation.load_rotation_chain(path)
+                if not certs:
+                    continue
+                producer = rotation.addr_of_public_key(certs[0].prev_public_key)
+                # Validate up front so a bad chain never reaches verification.
+                rotation.verify_rotation_chain(producer, certs)
+                self._rotation_store[producer] = certs
+            except Exception as e:
+                RNS.log(f"ICN: skipping invalid rotation chain {path}: {e}", RNS.LOG_WARNING)
 
     async def shutdown(self) -> None:
         """Gracefully stop link pool and RNS."""
@@ -165,8 +190,27 @@ class ICNClient:
         producer address (``name.rns_addr``). A present-but-invalid signature
         is always rejected. A missing signature, or one whose producer key we
         can't recall, is rejected only when ``require_signature`` is set.
+
+        When a key-rotation chain is known for the producer, the Data is
+        accepted if it verifies against any key the chain authorizes (anchor or
+        a delegated key); the chain is self-certifying, so no recall is needed.
         """
         if data.signature is not None:
+            # If we hold a rotation chain for this producer, the set of valid
+            # signing keys is the chain's authorized keys (self-certifying).
+            certs = self._rotation_store.get(data.name.rns_addr)
+            if certs:
+                try:
+                    validators = rotation.authorized_validators(
+                        data.name.rns_addr, certs
+                    )
+                except rotation.RotationError as e:
+                    return False, ValueError(f"invalid rotation chain: {e}")
+                if any(data.verify_signature(v) for v in validators):
+                    return True, None
+                return False, ValueError(
+                    "Data signature not authorized by producer's rotation chain"
+                )
             # The producer address in a name is the producer's *identity* hash
             # (not a destination hash), so recall accordingly.
             identity = RNS.Identity.recall(

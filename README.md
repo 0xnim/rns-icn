@@ -15,8 +15,11 @@ RNS encrypted Links.
 > signing has landed: origins sign Data with their Ed25519 RNS identity and
 > clients verify it (cache-poisoning defence), with the sequence number and a
 > signing timestamp now bound into the signed envelope so clients can reject a
-> relay replaying a stale-but-validly-signed version (rollback). Access control
-> and name resolution (Phase 3.3/3.4) are the main remaining work.
+> relay replaying a stale-but-validly-signed version (rollback). Producers can
+> rotate their signing key via a self-certifying chain of signed delegation
+> certificates (`rns_icn/rotation.py`), so clients keep verifying across a key
+> change without trusting the mesh. Access control and name resolution (Phase
+> 3.3/3.4) are the main remaining work.
 
 ## How it works
 

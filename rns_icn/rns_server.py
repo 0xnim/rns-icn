@@ -87,13 +87,23 @@ class ICNServer(BaseICNServer):
         self.app_name = config.app_name
         self.aspect = config.aspect
 
-        # Base ICNServer uses the 16-byte RNS address; pass the identity's
-        # Ed25519 signer so origin-produced Data is signed (Phase 3.1/3.2).
+        # Signing identity: the anchor identity by default, or a separate
+        # delegated key for key rotation (the namespace/destination stays the
+        # anchor; clients verify the delegated key via the producer's rotation
+        # chain — see rns_icn.rotation).
+        if config.signing_identity_path:
+            self.signing_identity = load_or_create_identity(config.signing_identity_path)
+        else:
+            self.signing_identity = identity
+
+        # Base ICNServer uses the 16-byte RNS address (the anchor); pass the
+        # signing identity's Ed25519 signer so origin-produced Data is signed
+        # (Phase 3.1/3.2).
         super().__init__(
             self.identity.hash,
             cs_max=config.cs_max_entries,
             role=config.role,
-            signer=self.identity.sign,
+            signer=self.signing_identity.sign,
             invalidation_verifier=_verify_invalidation,
         )
 

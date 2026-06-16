@@ -52,6 +52,11 @@ class ClientConfig:
     # on signed Data; unsigned Data is unaffected. Default False for additive
     # rollout, mirroring require_signature.
     reject_rollback: bool = False
+    # Paths to producer key-rotation chain files (see rns_icn.rotation). Each
+    # file holds the signed delegation chain for one producer; the client loads
+    # them and accepts Data signed by any key the chain authorizes, so a
+    # producer can rotate its signing key without breaking verification.
+    rotation_chains: List[str] = field(default_factory=list)
     log_level: str = "INFO"
     log_json: bool = False
 
@@ -70,6 +75,12 @@ class ServerConfig:
     rns_configdir: Optional[str] = None
     mesh_interfaces: List[str] = field(default_factory=lambda: ["UTN Oregon"])
     role: ServerRole = ServerRole.ORIGIN
+    # Optional separate signing identity for key rotation. The server still
+    # owns its destination/namespace under ``identity_path`` (the anchor), but
+    # signs originated Data with this delegated key — pair it with a rotation
+    # chain delegating from the anchor to this key so clients still verify.
+    # None = sign with the anchor identity (no rotation).
+    signing_identity_path: Optional[str] = None
     announce_interval: float = 30.0
     reannounce_on_link: bool = True
     cs_max_entries: int = 10000
@@ -141,6 +152,9 @@ def _dict_to_client_config(data: Dict[str, Any], base_path: str) -> ClientConfig
         path_request_timeout=data.get("path_request_timeout", 30.0),
         require_signature=data.get("require_signature", False),
         reject_rollback=data.get("reject_rollback", False),
+        rotation_chains=[
+            str((base_dir / p).expanduser()) for p in data.get("rotation_chains", [])
+        ],
         log_level=data.get("log_level", "INFO"),
         log_json=data.get("log_json", False),
     )
@@ -178,6 +192,10 @@ def _dict_to_server_config(data: Dict[str, Any], base_path: str) -> ServerConfig
     if rns_configdir:
         rns_configdir = str(Path(rns_configdir).expanduser())
 
+    signing_identity_path = data.get("signing_identity_path")
+    if signing_identity_path:
+        signing_identity_path = str((base_dir / signing_identity_path).expanduser())
+
     return ServerConfig(
         identity_path=identity_path,
         app_name=data.get("app_name", "icn"),
@@ -185,6 +203,7 @@ def _dict_to_server_config(data: Dict[str, Any], base_path: str) -> ServerConfig
         rns_configdir=rns_configdir,
         mesh_interfaces=data.get("mesh_interfaces", ["UTN Oregon"]),
         role=role,
+        signing_identity_path=signing_identity_path,
         announce_interval=data.get("announce_interval", 30.0),
         reannounce_on_link=data.get("reannounce_on_link", True),
         cs_max_entries=data.get("cs_max_entries", 10000),

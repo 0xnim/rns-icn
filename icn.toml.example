@@ -41,6 +41,13 @@ require_signature = false
 # Default false (additive rollout).
 reject_rollback = false
 
+# Security: producer key rotation. Each file is a signed delegation chain
+# (rns_icn.rotation) for one producer; the client accepts Data signed by any
+# key the chain authorizes (the anchor or a rotated-to key), so a producer can
+# change its signing key without breaking verification. Paths are relative to
+# this config file. Default: none.
+# rotation_chains = ["producers/acme.chain"]
+
 # Logging
 log_level = "INFO"
 log_json = false
@@ -58,6 +65,12 @@ mesh_interfaces = ["UTN Oregon"]
 
 # Server role: ORIGIN, CACHE, or PROPAGATION
 role = "ORIGIN"
+
+# Key rotation: optional separate signing identity. The server keeps its
+# destination/namespace under identity_path (the anchor) but signs originated
+# Data with this delegated key. Pair it with a rotation chain (issued by the
+# anchor) so clients still verify. Default: sign with the anchor identity.
+# signing_identity_path = "/etc/rns-icn/signing_identity"
 
 # Announce settings
 announce_interval = 30.0

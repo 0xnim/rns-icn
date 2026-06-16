@@ -193,9 +193,10 @@ def test_content_store_unsigned_stays_unsigned(tmp_path):
 # ── Client policy ──
 
 
-def _client(require_signature: bool):
+def _client(require_signature: bool, rotation_store=None):
     client = object.__new__(_ClientForPolicy)
     client.config = ClientConfig(require_signature=require_signature)
+    client._rotation_store = rotation_store or {}
     return client
 
 
@@ -210,6 +211,7 @@ def _rollback_client(reject_rollback: bool):
     client = object.__new__(_ClientForPolicy)
     client.config = ClientConfig(reject_rollback=reject_rollback)
     client._seen_signed_key = {}
+    client._rotation_store = {}
     return client
 
 
@@ -332,6 +334,61 @@ def test_rollback_is_per_name(identity):
     assert client._check_rollback(a_new)[0]
     # A different name with a low key is not a rollback of /a.
     assert client._check_rollback(b_old)[0]
+
+
+# ── Key rotation (Phase 3.1: _check_signature consults the rotation chain) ──
+
+from rns_icn.rotation import KeyRotation  # noqa: E402
+
+
+def _rotation_client(anchor, *gens):
+    """A policy client holding a valid rotation chain anchor → gens..."""
+    certs, prev = [], anchor
+    for i, nxt in enumerate(gens, start=1):
+        certs.append(KeyRotation.create(anchor.hash, i, prev, nxt))
+        prev = nxt
+    client = object.__new__(_ClientForPolicy)
+    client.config = ClientConfig(require_signature=True)
+    client._rotation_store = {anchor.hash: certs}
+    return client
+
+
+def test_rotated_key_signature_accepted():
+    anchor, new = RNS.Identity(), RNS.Identity()
+    client = _rotation_client(anchor, new)
+    data = Data.new(name=Name(anchor.hash, [b"doc"]), content=b"x").sign(new.sign)
+    ok, err = client._check_signature(data)
+    assert ok and err is None
+
+
+def test_anchor_signature_still_accepted_with_chain():
+    anchor, new = RNS.Identity(), RNS.Identity()
+    client = _rotation_client(anchor, new)
+    data = Data.new(name=Name(anchor.hash, [b"doc"]), content=b"x").sign(anchor.sign)
+    ok, err = client._check_signature(data)
+    assert ok and err is None
+
+
+def test_unauthorized_key_rejected_under_chain():
+    anchor, new, attacker = RNS.Identity(), RNS.Identity(), RNS.Identity()
+    client = _rotation_client(anchor, new)
+    data = Data.new(name=Name(anchor.hash, [b"doc"]), content=b"x").sign(attacker.sign)
+    ok, err = client._check_signature(data)
+    assert not ok and err is not None
+
+
+def test_chain_consulted_without_recall(monkeypatch):
+    """A known chain is self-certifying — verification must not require recall."""
+    monkeypatch.setattr(
+        RNS.Identity, "recall",
+        staticmethod(lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("recall should not be called when a chain is present")
+        )),
+    )
+    anchor, new = RNS.Identity(), RNS.Identity()
+    client = _rotation_client(anchor, new)
+    data = Data.new(name=Name(anchor.hash, [b"doc"]), content=b"x").sign(new.sign)
+    assert client._check_signature(data)[0]
 
 
 # ── Per-chunk signatures (Phase 3.2: resource_transport / streamed files) ──
