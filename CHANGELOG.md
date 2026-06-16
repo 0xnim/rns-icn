@@ -61,6 +61,11 @@ is still being shaped in place.
 - Content Store no longer caches unsolicited Data by default — only Data that
   satisfies a pending Interest (the standard NDN rule). Trusted propagation push
   opts in via `Forwarder.receive_data(..., cache_unsolicited=True)`.
+- **Declare `pytest-asyncio` as a dev dependency** (with explicit
+  `asyncio_mode = "strict"`). The async test suite relied on it being present in
+  the local environment; a clean `pip install -e ".[dev]"` lacked it, so all
+  `async def` tests errored with "async def functions are not natively
+  supported" — invisible locally, fatal in CI.
 - `PROTOCOL.md` normative specification, `LICENSE` (MIT), `SECURITY.md`.
 - Expanded ruff rule set (bugbear, async, comprehensions, pytest, pyupgrade,
   ruff-specific, simplify); CI matrix across Python 3.10–3.13.

@@ -16,6 +16,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8",
+    "pytest-asyncio>=0.24",
     "pytest-cov>=5",
     "ruff>=0.6",
     "mypy>=1.11",
@@ -34,6 +35,8 @@ icn-fetch = "rns_icn.cli_fetch:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Async tests carry explicit @pytest.mark.asyncio markers (strict mode).
+asyncio_mode = "strict"
 
 [tool.coverage.run]
 source = ["rns_icn"]
