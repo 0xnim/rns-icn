@@ -281,6 +281,27 @@ class TestDataMetadata:
         assert not parsed.freshness.fresh
         assert parsed.freshness.age_seconds == 5000
 
+    def test_stale_with_trailing_fields(self):
+        """Regression: the staleness field must advance the read cursor.
+
+        A stale-age field (flag 0x04) followed by freshness_period and/or
+        signed_at used to leave ``pos`` unadvanced, corrupting every field
+        after it — most damagingly the authenticated ``signed_at`` of a signed
+        Data served while stale. See KAT vector ``metadata/full``.
+        """
+        meta = DataMetadata(
+            content_hash=b"\x02" + b"\x00" * 31,
+            sequence=7,
+            freshness=Freshness(fresh=False, age_seconds=42),
+            freshness_period=3600,
+            signed_at=1700000000,
+        )
+        parsed = DataMetadata.from_bytes(meta.to_bytes())
+        assert parsed.freshness.age_seconds == 42
+        assert parsed.freshness_period == 3600
+        assert parsed.signed_at == 1700000000
+        assert parsed.sequence == 7
+
 
 class TestPacket:
     def test_parse_interest(self):

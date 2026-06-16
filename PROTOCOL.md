@@ -859,3 +859,38 @@ traffic-analysis resistance, or recovery from a lost or compromised producer key
 
 **Domain tags:** `icn-data\x01`, `icn-invalidate\x01`, `icn-capability\x01`,
 `icn-content-key\x01`.
+
+---
+
+## Appendix A. Test vectors
+
+A re-implementation is conformant only if it agrees with this one byte-for-byte.
+The canonical known-answer-test (KAT) vectors live at
+[`tests/vectors/wire_vectors.json`](tests/vectors/wire_vectors.json) and are the
+authoritative fixture for re-implementers; see
+[`tests/vectors/README.md`](tests/vectors/README.md) for the schema.
+
+The fixture is generated from a **fixed producer identity** — `seed_hex` loaded
+via `RNS.Identity.from_bytes`, with the resulting `producer_hash_hex` (the
+16-byte `Name.rns_addr`, [§5.2](#52-self-certifying-addressing)) and
+`public_key_hex` committed alongside. Ed25519 signing is deterministic
+(RFC 8032), so each signed vector commits the exact `signed_hash_hex`
+([§10.2](#102-data-signature-envelope)) and `signature_hex`; a re-implementer can
+verify the committed signature against `public_key_hex` without RNS.
+
+Each vector covers one of: varint encoding ([§4.1](#41-varint) — boundary
+values), `Name` ([§5](#5-names)), `Interest`/`Data` and the control packets
+([§7](#7-interest)–[§9](#9-control-packets)) including `Invalidate`,
+`DataMetadata` flag combinations, `Capability` and `derive_cek`
+([§11](#11-access-control)), plus a negative vector asserting an unknown
+per-packet version byte is rejected
+([§17](#17-versioning-and-forward-compatibility)). Non-deterministic crypto
+(ECIES CEK wrapping, AES content encryption) is exercised by round-trip rather
+than fixed bytes.
+
+The reference implementation re-verifies itself against the committed fixture in
+`tests/test_vectors.py`; regenerate intentionally with
+`python scripts/gen_test_vectors.py` (the `--check` mode fails CI on undocumented
+drift). For the entire `0.x` series the wire is unstable, so the vectors may
+change between commits; from `1.0` a change to any byte-exact vector is a breaking
+change governed by [§17](#17-versioning-and-forward-compatibility).

@@ -364,6 +364,7 @@ class DataMetadata:
                 raise DataError("buffer too short for staleness")
             age = struct.unpack(">Q", data[pos:pos + 8])[0]
             freshness = Freshness(fresh=False, age_seconds=age)
+            pos += 8
         freshness_period = None
         if flags & 0x08:
             if pos + 8 > len(data):

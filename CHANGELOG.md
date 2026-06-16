@@ -41,6 +41,17 @@ is still being shaped in place.
   capability-advertisement channel, separate from the wire version.
 - Early Phase 4: capability negotiation, pub/sub with an offline queue, and
   chunked transfer for large content.
+- **Canonical wire-format test vectors.** `tests/vectors/wire_vectors.json` is a
+  committed KAT fixture (fixed identity → exact bytes, signed hashes, and
+  signatures) covering every wire-serializable type plus `derive_cek` and a
+  reject-unknown-version case; `tests/test_vectors.py` holds the reference to it
+  and re-implementers can self-verify against it. Generated/checked via
+  `scripts/gen_test_vectors.py`. See `PROTOCOL.md` Appendix A.
+- **Fix `DataMetadata` parse misalignment.** The staleness field (`age_seconds`)
+  did not advance the read cursor, so a Data carrying a stale age *and* a later
+  field (`freshness_period`/`signed_at`) mis-parsed everything after it — most
+  damagingly the authenticated `signed_at` of a signed Data served while stale.
+  Caught by the new test vectors.
 
 ### Tooling / operations
 

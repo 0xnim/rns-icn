@@ -1,0 +1,389 @@
+{
+  "_comment": "Canonical wire-format KAT vectors for rns-icn. Regenerate with: python scripts/gen_test_vectors.py",
+  "seed_hex": "0faaca91e628344fb6a8d42a6093ce4210b1dfb3ac9d0e5c1024a87af0b3afbcc2bf42966ae721c6215db91980e9026c34cad52576c575f6f2791b2ea5802e72",
+  "producer_hash_hex": "ad0324ff38c1c06511d1246eb4c7d791",
+  "public_key_hex": "e74346f60094b6336dd26b3f70f08722e16403cda4c64232c921c3edf2505218370a3b3e386ac7813ca003f0d6dd2dbbe7d375b9937e0b4a6b0f36ceb63d89ca",
+  "vectors": [
+    {
+      "name": "varint/0",
+      "kind": "varint",
+      "exact": true,
+      "fields": {
+        "value": 0
+      },
+      "wire_hex": "00"
+    },
+    {
+      "name": "varint/0xfc",
+      "kind": "varint",
+      "exact": true,
+      "fields": {
+        "value": 252
+      },
+      "wire_hex": "fc"
+    },
+    {
+      "name": "varint/0xfd",
+      "kind": "varint",
+      "exact": true,
+      "fields": {
+        "value": 253
+      },
+      "wire_hex": "fd00fd"
+    },
+    {
+      "name": "varint/0xffff",
+      "kind": "varint",
+      "exact": true,
+      "fields": {
+        "value": 65535
+      },
+      "wire_hex": "fdffff"
+    },
+    {
+      "name": "varint/0x10000",
+      "kind": "varint",
+      "exact": true,
+      "fields": {
+        "value": 65536
+      },
+      "wire_hex": "fe00010000"
+    },
+    {
+      "name": "varint/0xffffffff",
+      "kind": "varint",
+      "exact": true,
+      "fields": {
+        "value": 4294967295
+      },
+      "wire_hex": "feffffffff"
+    },
+    {
+      "name": "varint/0x100000000",
+      "kind": "varint",
+      "exact": true,
+      "fields": {
+        "value": 4294967296
+      },
+      "wire_hex": "ff0000000100000000"
+    },
+    {
+      "name": "name/root",
+      "kind": "name",
+      "exact": true,
+      "fields": {
+        "components": [
+          "ad0324ff38c1c06511d1246eb4c7d791"
+        ],
+        "content_hash": null
+      },
+      "wire_hex": "0110ad0324ff38c1c06511d1246eb4c7d791"
+    },
+    {
+      "name": "name/single-label",
+      "kind": "name",
+      "exact": true,
+      "fields": {
+        "components": [
+          "ad0324ff38c1c06511d1246eb4c7d791",
+          "646f63"
+        ],
+        "content_hash": null
+      },
+      "wire_hex": "0210ad0324ff38c1c06511d1246eb4c7d79103646f63"
+    },
+    {
+      "name": "name/multi-component",
+      "kind": "name",
+      "exact": true,
+      "fields": {
+        "components": [
+          "ad0324ff38c1c06511d1246eb4c7d791",
+          "61",
+          "62",
+          "63"
+        ],
+        "content_hash": null
+      },
+      "wire_hex": "0410ad0324ff38c1c06511d1246eb4c7d791016101620163"
+    },
+    {
+      "name": "name/with-content-hash",
+      "kind": "name",
+      "exact": true,
+      "fields": {
+        "components": [
+          "ad0324ff38c1c06511d1246eb4c7d791",
+          "646f63"
+        ],
+        "content_hash": "3cf2d09da453bbdd6b68d8a1acd5f15ba23ba46d4ff087592b3d319432500a50"
+      },
+      "wire_hex": "0210ad0324ff38c1c06511d1246eb4c7d79103646f63ff3cf2d09da453bbdd6b68d8a1acd5f15ba23ba46d4ff087592b3d319432500a50"
+    },
+    {
+      "name": "interest/minimal",
+      "kind": "interest",
+      "exact": true,
+      "fields": {
+        "name": {
+          "components": [
+            "ad0324ff38c1c06511d1246eb4c7d791",
+            "646f63"
+          ],
+          "content_hash": null
+        },
+        "nonce": "0001020304050607",
+        "lifetime_ms": 4000,
+        "hop_limit": 16
+      },
+      "wire_hex": "0101160210ad0324ff38c1c06511d1246eb4c7d79103646f63000102030405060700000fa00810"
+    },
+    {
+      "name": "interest/with-selector",
+      "kind": "interest",
+      "exact": true,
+      "fields": {
+        "name": {
+          "components": [
+            "ad0324ff38c1c06511d1246eb4c7d791",
+            "73747265616d"
+          ],
+          "content_hash": null
+        },
+        "nonce": "1112131415161718",
+        "lifetime_ms": 8000,
+        "selector_min_sequence": 6,
+        "hop_limit": 16
+      },
+      "wire_hex": "0101190210ad0324ff38c1c06511d1246eb4c7d7910673747265616d111213141516171800001f400c000000000000000610"
+    },
+    {
+      "name": "interest/prefix-and-fresh",
+      "kind": "interest",
+      "exact": true,
+      "fields": {
+        "name": {
+          "components": [
+            "ad0324ff38c1c06511d1246eb4c7d791",
+            "646f63"
+          ],
+          "content_hash": null
+        },
+        "nonce": "2122232425262728",
+        "lifetime_ms": 4000,
+        "can_be_prefix": true,
+        "must_be_fresh": true,
+        "hop_limit": 8
+      },
+      "wire_hex": "0101160210ad0324ff38c1c06511d1246eb4c7d79103646f63212223242526272800000fa00b08"
+    },
+    {
+      "name": "metadata/full",
+      "kind": "metadata",
+      "exact": true,
+      "fields": {
+        "content_hash": "324dcf027dd4a30a932c441f365a25e86b173defa4b8e58948253471b81b72cf",
+        "sequence": 7,
+        "fresh": false,
+        "age_seconds": 42,
+        "freshness_period": 3600,
+        "signed_at": 1700000000,
+        "encrypted": true
+      },
+      "wire_hex": "3f324dcf027dd4a30a932c441f365a25e86b173defa4b8e58948253471b81b72cf0000000000000007000000000000002a0000000000000e10000000006553f100"
+    },
+    {
+      "name": "data/unsigned-no-metadata",
+      "kind": "data",
+      "exact": true,
+      "fields": {
+        "name": {
+          "components": [
+            "ad0324ff38c1c06511d1246eb4c7d791",
+            "646f63"
+          ],
+          "content_hash": null
+        },
+        "content": "68656c6c6f20776f726c64",
+        "metadata": null
+      },
+      "wire_hex": "0201160210ad0324ff38c1c06511d1246eb4c7d79103646f630000000b68656c6c6f20776f726c6400"
+    },
+    {
+      "name": "data/content-hash-only",
+      "kind": "data",
+      "exact": true,
+      "fields": {
+        "name": {
+          "components": [
+            "ad0324ff38c1c06511d1246eb4c7d791",
+            "646f63"
+          ],
+          "content_hash": null
+        },
+        "content": "68656c6c6f20776f726c64",
+        "metadata": {
+          "content_hash": "256c83b297114d201b30179f3f0ef0cace9783622da5974326b436178aeef610"
+        }
+      },
+      "wire_hex": "0201160210ad0324ff38c1c06511d1246eb4c7d79103646f630000000b68656c6c6f20776f726c64012101256c83b297114d201b30179f3f0ef0cace9783622da5974326b436178aeef610"
+    },
+    {
+      "name": "data/signed-full",
+      "kind": "data",
+      "exact": true,
+      "fields": {
+        "name": {
+          "components": [
+            "ad0324ff38c1c06511d1246eb4c7d791",
+            "646f63"
+          ],
+          "content_hash": null
+        },
+        "content": "68656c6c6f20776f726c64",
+        "metadata": {
+          "content_hash": "256c83b297114d201b30179f3f0ef0cace9783622da5974326b436178aeef610",
+          "sequence": 3,
+          "signed_at": 1700000000
+        }
+      },
+      "signed_hash_hex": "a5d4b0dfa6b1b54efaf859082c50329a8970bbf9dca84a75a8c0138b167e4e4e",
+      "signature_hex": "013ed6bf0e2314e9c544513e5ac78220e59fa62b8a430036551457caad44e3f72a639d245f14d36b57e4898ee145d4482c963feb523fe953ca8dd7612ea9c607",
+      "wire_hex": "0201160210ad0324ff38c1c06511d1246eb4c7d79103646f630000000b68656c6c6f20776f726c64033113256c83b297114d201b30179f3f0ef0cace9783622da5974326b436178aeef6100000000000000003000000006553f100013ed6bf0e2314e9c544513e5ac78220e59fa62b8a430036551457caad44e3f72a639d245f14d36b57e4898ee145d4482c963feb523fe953ca8dd7612ea9c607"
+    },
+    {
+      "name": "data/signed-encrypted",
+      "kind": "data",
+      "exact": true,
+      "fields": {
+        "name": {
+          "components": [
+            "ad0324ff38c1c06511d1246eb4c7d791",
+            "736563726574"
+          ],
+          "content_hash": null
+        },
+        "content": "636970686572746578742d6279746573",
+        "metadata": {
+          "content_hash": "fc83727babcf92efbfbb2763aa39e3fc94fce746962c2df55882c5327a20c6a7",
+          "sequence": 1,
+          "signed_at": 1700000000,
+          "encrypted": true
+        }
+      },
+      "signed_hash_hex": "e03749b2ced568ce941414cb4b8387ff27c93ee6ec68a84dbb2052a87fc2f078",
+      "signature_hex": "e1df31df7b6f83d109c6764c5b71010546ff91364626b0615f0db3ae64c55f833303877b01c2c840f25cdd2c3e3a50c7eb3cc392c9a904835e56d072a676550c",
+      "wire_hex": "0201190210ad0324ff38c1c06511d1246eb4c7d7910673656372657400000010636970686572746578742d6279746573033133fc83727babcf92efbfbb2763aa39e3fc94fce746962c2df55882c5327a20c6a70000000000000001000000006553f100e1df31df7b6f83d109c6764c5b71010546ff91364626b0615f0db3ae64c55f833303877b01c2c840f25cdd2c3e3a50c7eb3cc392c9a904835e56d072a676550c"
+    },
+    {
+      "name": "invalidate/unsigned",
+      "kind": "invalidate",
+      "exact": true,
+      "fields": {
+        "name": {
+          "components": [
+            "ad0324ff38c1c06511d1246eb4c7d791",
+            "646f63"
+          ],
+          "content_hash": null
+        },
+        "epoch": 1700000000
+      },
+      "wire_hex": "0601160210ad0324ff38c1c06511d1246eb4c7d79103646f63000000006553f10000"
+    },
+    {
+      "name": "invalidate/prefix-signed",
+      "kind": "invalidate",
+      "exact": true,
+      "fields": {
+        "name": {
+          "components": [
+            "ad0324ff38c1c06511d1246eb4c7d791",
+            "66656564"
+          ],
+          "content_hash": null
+        },
+        "epoch": 1700000000,
+        "is_prefix": true
+      },
+      "signed_hash_hex": "1cd83500dbd101c50ba24731acca668f090c9d28e9a08d388cece4b6f88cc4db",
+      "signature_hex": "e066129fa9009da0caaab9c13fa60fcd65ee8b8468c90cb0dc2a2fd26d1db3dfabc1819e05aae87b0fe4f2427d4363697995ead9cbaa9b4990ecafd0dd960c05",
+      "wire_hex": "0601170210ad0324ff38c1c06511d1246eb4c7d7910466656564000000006553f10003e066129fa9009da0caaab9c13fa60fcd65ee8b8468c90cb0dc2a2fd26d1db3dfabc1819e05aae87b0fe4f2427d4363697995ead9cbaa9b4990ecafd0dd960c05"
+    },
+    {
+      "name": "apsubscribe/basic",
+      "kind": "apsubscribe",
+      "exact": true,
+      "fields": {
+        "name": {
+          "components": [
+            "ad0324ff38c1c06511d1246eb4c7d791",
+            "73747265616d"
+          ],
+          "content_hash": null
+        },
+        "start_from_now": true
+      },
+      "wire_hex": "0301190210ad0324ff38c1c06511d1246eb4c7d7910673747265616d01"
+    },
+    {
+      "name": "proppeer/wants-sync",
+      "kind": "proppeer",
+      "exact": true,
+      "fields": {
+        "version": 1,
+        "rns_addr": "ad0324ff38c1c06511d1246eb4c7d791",
+        "wants_sync": true
+      },
+      "wire_hex": "0401ad0324ff38c1c06511d1246eb4c7d79101"
+    },
+    {
+      "name": "cappeer/origin",
+      "kind": "cappeer",
+      "exact": true,
+      "fields": {
+        "version": 1,
+        "role": 0,
+        "features": 31
+      },
+      "wire_hex": "0501000000001f"
+    },
+    {
+      "name": "capability/signed",
+      "kind": "capability",
+      "exact": true,
+      "fields": {
+        "producer": "ad0324ff38c1c06511d1246eb4c7d791",
+        "consumer": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "prefix": {
+          "components": [
+            "ad0324ff38c1c06511d1246eb4c7d791",
+            "736563726574"
+          ],
+          "content_hash": null
+        },
+        "wrapped_cek": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "issued_at": 1700000000,
+        "expires_at": 1700003600
+      },
+      "signed_hash_hex": "9ccc98e4759e4186fb74d7c5ffc6e8f053f739c16fe841cfdac7c7a2dc216407",
+      "signature_hex": "7e7a71b0a5bb4fb4e1c15360350d44c4d87af45fc35ec5397de41602ecc570a0a6d6aed64e1fd3f025b926f5dad0d181f2ee518d0378a60f2986f4247d609b0f",
+      "wire_hex": "ad0324ff38c1c06511d1246eb4c7d791aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa000000006553f100000000006553ff1000190210ad0324ff38c1c06511d1246eb4c7d791067365637265740050bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb017e7a71b0a5bb4fb4e1c15360350d44c4d87af45fc35ec5397de41602ecc570a0a6d6aed64e1fd3f025b926f5dad0d181f2ee518d0378a60f2986f4247d609b0f"
+    },
+    {
+      "name": "derive_cek/secret-prefix",
+      "kind": "derive_cek",
+      "exact": true,
+      "fields": {
+        "prefix": {
+          "components": [
+            "ad0324ff38c1c06511d1246eb4c7d791",
+            "736563726574"
+          ],
+          "content_hash": null
+        }
+      },
+      "cek_hex": "b01f9be12440f5acee6c357f4c15ea3d92ee9ed922225ee4259f90c2fa021ea3"
+    }
+  ]
+}
