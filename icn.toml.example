@@ -33,6 +33,14 @@ max_retry_delay = 30.0
 # cannot recall. Default false = verify-if-present (additive rollout).
 require_signature = false
 
+# Security: rollback protection. The producer binds a sequence number and a
+# signing timestamp into the signed envelope; with reject_rollback true the
+# client tracks the highest authenticated (signed_at, sequence) seen per name
+# and rejects signed Data that rolls back to an older version (a cache/relay
+# replaying stale-but-validly-signed content). Only affects signed Data.
+# Default false (additive rollout).
+reject_rollback = false
+
 # Logging
 log_level = "INFO"
 log_json = false

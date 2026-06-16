@@ -46,6 +46,12 @@ class ClientConfig:
     # producer identity. When False (default), verify signatures when present
     # but accept unsigned/unverifiable Data (hash-only, additive rollout).
     require_signature: bool = False
+    # When True, reject signed Data whose authenticated (signed_at, sequence)
+    # is older than one already accepted for the same name — defeats a cache or
+    # relay replaying a stale-but-validly-signed version (rollback). Only acts
+    # on signed Data; unsigned Data is unaffected. Default False for additive
+    # rollout, mirroring require_signature.
+    reject_rollback: bool = False
     log_level: str = "INFO"
     log_json: bool = False
 
@@ -134,6 +140,7 @@ def _dict_to_client_config(data: Dict[str, Any], base_path: str) -> ClientConfig
         fetch_timeout=data.get("fetch_timeout", 30.0),
         path_request_timeout=data.get("path_request_timeout", 30.0),
         require_signature=data.get("require_signature", False),
+        reject_rollback=data.get("reject_rollback", False),
         log_level=data.get("log_level", "INFO"),
         log_json=data.get("log_json", False),
     )

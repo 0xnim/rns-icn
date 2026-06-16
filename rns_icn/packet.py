@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import os
 import struct
+import time
 from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import Callable, Optional
@@ -257,6 +258,11 @@ class DataMetadata:
     # until it has been held longer than this, then stale. None = no declared
     # lifetime (caches consider it fresh until TTL eviction — legacy behaviour).
     freshness_period: Optional[int] = None
+    # Unix timestamp (seconds) the producer signed this Data at. Folded into the
+    # signed envelope (see Data.signed_hash) so it is authenticated, letting a
+    # consumer detect a cache/relay replaying a stale-but-validly-signed version
+    # (rollback). None on unsigned Data and on pre-3.1 signed Data.
+    signed_at: Optional[int] = None
 
     def to_bytes(self) -> bytes:
         flags = 0
@@ -268,6 +274,8 @@ class DataMetadata:
             flags |= 0x04
         if self.freshness_period is not None:
             flags |= 0x08
+        if self.signed_at is not None:
+            flags |= 0x10
         buf = bytearray([flags])
         if self.content_hash is not None:
             buf.extend(self.content_hash)
@@ -277,6 +285,8 @@ class DataMetadata:
             buf.extend(struct.pack(">Q", self.freshness.age_seconds))
         if self.freshness_period is not None:
             buf.extend(struct.pack(">Q", self.freshness_period))
+        if self.signed_at is not None:
+            buf.extend(struct.pack(">Q", self.signed_at))
         return bytes(buf)
 
     @classmethod
@@ -309,8 +319,15 @@ class DataMetadata:
                 raise DataError("buffer too short for freshness_period")
             freshness_period = struct.unpack(">Q", data[pos:pos + 8])[0]
             pos += 8
+        signed_at = None
+        if flags & 0x10:
+            if pos + 8 > len(data):
+                raise DataError("buffer too short for signed_at")
+            signed_at = struct.unpack(">Q", data[pos:pos + 8])[0]
+            pos += 8
         return cls(content_hash=content_hash, sequence=sequence,
-                   freshness=freshness, freshness_period=freshness_period)
+                   freshness=freshness, freshness_period=freshness_period,
+                   signed_at=signed_at)
 
 
 # ── Data ──
@@ -365,14 +382,38 @@ class Data:
         h.update(self.content)
         if self.metadata.content_hash is not None:
             h.update(self.metadata.content_hash)
+        # Sequence and signed-at are domain-tagged so they bind into the
+        # envelope unambiguously (and distinguish "value 0" from "absent").
+        # A relay that tampers with either field, or strips it, breaks the
+        # signature; this is what lets a consumer trust them for rollback
+        # detection. Appended after the legacy fields so pre-3.1 signatures
+        # over name+content+hash still verify.
+        if self.metadata.sequence is not None:
+            h.update(b"\x01")
+            h.update(struct.pack(">Q", self.metadata.sequence))
+        if self.metadata.signed_at is not None:
+            h.update(b"\x02")
+            h.update(struct.pack(">Q", self.metadata.signed_at))
         return h.digest()
 
-    def sign(self, signer: Callable[[bytes], bytes]) -> Data:
+    def sign(
+        self,
+        signer: Callable[[bytes], bytes],
+        signed_at: Optional[int] = None,
+    ) -> Data:
         """Attach a producer signature over signed_hash().
 
         ``signer`` is typically ``RNS.Identity.sign``; it must return a
         SIGNATURE_BYTES-long Ed25519 signature.
+
+        Stamps ``metadata.signed_at`` (unix seconds; the current time unless
+        an explicit ``signed_at`` is given) before signing, so the timestamp is
+        part of the signed envelope. An already-set ``signed_at`` is preserved.
         """
+        if self.metadata.signed_at is None:
+            self.metadata.signed_at = (
+                signed_at if signed_at is not None else int(time.time())
+            )
         sig = signer(self.signed_hash())
         if len(sig) != SIGNATURE_BYTES:
             raise DataError(
@@ -380,6 +421,20 @@ class Data:
             )
         self.signature = sig
         return self
+
+    def freshness_key(self) -> Optional[tuple[int, int]]:
+        """Authenticated ``(signed_at, sequence)`` ordering key, or None.
+
+        Only meaningful for signed Data: an unsigned timestamp/sequence is
+        attacker-controlled, so this returns None unless a signature is present
+        and at least one of the fields is set. Consumers compare keys for the
+        same name to reject a rollback to an older signed version.
+        """
+        if self.signature is None:
+            return None
+        if self.metadata.signed_at is None and self.metadata.sequence is None:
+            return None
+        return (self.metadata.signed_at or 0, self.metadata.sequence or 0)
 
     def verify_signature(self, validator: Callable[[bytes, bytes], bool]) -> bool:
         """Verify the attached signature against signed_hash().
@@ -397,7 +452,8 @@ class Data:
         has_meta = (self.metadata.content_hash is not None
                     or self.metadata.sequence is not None
                     or not self.metadata.freshness.fresh
-                    or self.metadata.freshness_period is not None)
+                    or self.metadata.freshness_period is not None
+                    or self.metadata.signed_at is not None)
         has_sig = self.signature is not None
 
         metadata_bytes = self.metadata.to_bytes() if has_meta else b""

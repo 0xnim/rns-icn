@@ -16,7 +16,7 @@ Phases 1 and 2 are complete; parts of Phase 4 (capability negotiation, pub/sub, 
 | Link establishment | `LinkPool` w/ reuse, health, announce injection | reconnect is on-use, not proactive |
 | Content store | SQLite + TTL + LRU + crash recovery | — |
 | Forwarding | Multi-hop (FIB/PIT/CS); `icn-router` binary; **cache coherency** (freshness period, stale-while-revalidate, signed invalidation) | no multi-path |
-| Naming | /hash/label, content-hash verified, **Ed25519 producer signatures** | access control + name resolution (Phase 3.3/3.4) |
+| Naming | /hash/label, content-hash verified, **Ed25519 producer signatures** (sequence + timestamp authenticated; client rollback protection) | access control + name resolution (Phase 3.3/3.4) |
 | API | Versioned via capability exchange | per-packet version not in Interest/Data |
 | Operations | TOML config, JSON logs, health + metrics | — |
 
@@ -102,7 +102,14 @@ Phases 1 and 2 are complete; parts of Phase 4 (capability negotiation, pub/sub, 
 - [x] Manifest signing (`ICNServer._maybe_sign` signs origin-owned Data incl. manifests; signs over `name + content + content_hash`)
 - [x] Client validation (`ICNClient._check_signature` recalls producer via `RNS.Identity.recall`, `verify-if-present` + `require_signature` strict mode)
 - [ ] Key rotation support
-- [ ] Sequence/timestamp inside the signed envelope (currently `signed_hash` covers name+content+hash, not sequence)
+- [x] Sequence/timestamp inside the signed envelope: `signed_hash` now binds
+  `name + content + content_hash + sequence + signed_at` (the latter two
+  domain-tagged and appended, so pre-3.1 signatures still verify). `Data.sign`
+  auto-stamps `metadata.signed_at`; the envelope round-trips on the wire and
+  through the ContentStore. Consumed by `Data.freshness_key()` +
+  `ICNClient._check_rollback` (config `reject_rollback`), which rejects a cache/
+  relay replaying a stale-but-validly-signed version (rollback) by tracking the
+  highest authenticated `(signed_at, sequence)` accepted per name.
 
 ### 3.2 Signed Data Packets
 - [x] Per-packet signature (`Data.sign`/`verify_signature`, 64-byte Ed25519; persisted in CS so caches re-serve verifiable Data)

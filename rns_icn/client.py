@@ -35,6 +35,9 @@ class ICNClient:
         self._link_pool: Optional[LinkPool] = None
         self._forwarder: Optional[Forwarder] = None
         self._face_counter = 1000
+        # name → highest authenticated (signed_at, sequence) accepted so far,
+        # used for rollback detection when config.reject_rollback is set.
+        self._seen_signed_key: dict[bytes, tuple[int, int]] = {}
 
     async def __aenter__(self) -> "ICNClient":
         return await self.start()
@@ -125,6 +128,10 @@ class ICNClient:
                     if not sig_ok:
                         last_error = sig_err
                         continue
+                    rb_ok, rb_err = self._check_rollback(result)
+                    if not rb_ok:
+                        last_error = rb_err
+                        continue
                     # Record successful fetch latency
                     fetch_latency = time.time() - fetch_start
                     metrics.record_fetch(fetch_latency, success=True)
@@ -178,6 +185,31 @@ class ICNClient:
         # Unsigned.
         if self.config.require_signature:
             return False, ValueError("Data is unsigned but signature is required")
+        return True, None
+
+    def _check_rollback(self, data: Data) -> tuple[bool, Optional[Exception]]:
+        """Reject signed Data that rolls back to an older authenticated version.
+
+        Tracks the highest authenticated ``(signed_at, sequence)`` accepted per
+        name; a later fetch carrying an older key for the same name is a relay
+        or cache replaying a stale-but-validly-signed version. No-op unless
+        ``config.reject_rollback`` is set, and only acts on signed Data (an
+        unsigned key is not trustworthy). Must run after signature verification.
+        """
+        if not self.config.reject_rollback:
+            return True, None
+        key = data.freshness_key()
+        if key is None:
+            return True, None
+        name_key = data.name.to_bytes()
+        previous = self._seen_signed_key.get(name_key)
+        if previous is not None and key < previous:
+            return False, ValueError(
+                "Data rolls back to an older signed version "
+                f"({key} < {previous})"
+            )
+        if previous is None or key > previous:
+            self._seen_signed_key[name_key] = key
         return True, None
 
     async def fetch_manifest(

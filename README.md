@@ -13,8 +13,10 @@ RNS encrypted Links.
 > caches age it to stale and revalidate upstream, serve-stale-while-revalidate
 > is configurable, and producers can issue signed cache invalidations. Phase 3
 > signing has landed: origins sign Data with their Ed25519 RNS identity and
-> clients verify it (cache-poisoning defence). Access control and name
-> resolution (Phase 3.3/3.4) are the main remaining work.
+> clients verify it (cache-poisoning defence), with the sequence number and a
+> signing timestamp now bound into the signed envelope so clients can reject a
+> relay replaying a stale-but-validly-signed version (rollback). Access control
+> and name resolution (Phase 3.3/3.4) are the main remaining work.
 
 ## How it works
 

@@ -61,6 +61,71 @@ def test_tampered_content_fails_verification(identity):
     assert not data.verify_signature(identity.validate)
 
 
+def test_signed_envelope_covers_sequence(identity):
+    """The sequence number is authenticated — a relay can't tamper with it."""
+    name = Name(rns_addr(), [b"doc"])
+    data = Data.new(name=name, content=b"v").with_sequence(7).sign(identity.sign)
+    assert data.verify_signature(identity.validate)
+
+    # Relay bumps the sequence to make stale content look newer.
+    data.metadata.sequence = 8
+    assert not data.verify_signature(identity.validate)
+
+
+def test_signed_envelope_covers_signed_at(identity):
+    """The signing timestamp is authenticated — a relay can't forge freshness."""
+    name = Name(rns_addr(), [b"doc"])
+    data = Data.new(name=name, content=b"v").sign(identity.sign, signed_at=1000)
+    assert data.metadata.signed_at == 1000
+    assert data.verify_signature(identity.validate)
+
+    data.metadata.signed_at = 9999
+    assert not data.verify_signature(identity.validate)
+
+
+def test_sign_auto_stamps_signed_at(identity):
+    """sign() stamps a timestamp when none is set, and preserves an explicit one."""
+    auto = Data.new(name=Name(rns_addr(), [b"a"]), content=b"x").sign(identity.sign)
+    assert auto.metadata.signed_at is not None
+
+    explicit = Data.new(name=Name(rns_addr(), [b"b"]), content=b"x")
+    explicit.metadata.signed_at = 42
+    explicit.sign(identity.sign)
+    assert explicit.metadata.signed_at == 42
+
+
+def test_signed_at_and_sequence_survive_serialization(identity):
+    """The envelope fields round-trip on the wire so caches re-serve verifiable Data."""
+    name = Name(rns_addr(), [b"doc"])
+    data = Data.new(name=name, content=b"p").with_sequence(3).sign(identity.sign, signed_at=555)
+    parsed = Data.from_bytes(data.to_bytes())
+    assert parsed.metadata.sequence == 3
+    assert parsed.metadata.signed_at == 555
+    assert parsed.verify_signature(identity.validate)
+
+
+def test_pre_31_signature_without_envelope_still_verifies(identity):
+    """A signature over only name+content+hash (no sequence/signed_at) verifies —
+    the new fields are appended, so legacy signed Data is unaffected."""
+    name = Name(rns_addr(), [b"doc"])
+    data = Data.new(name=name, content=b"legacy")
+    # Sign without stamping signed_at, mimicking pre-3.1 producers.
+    data.signature = identity.sign(data.signed_hash())
+    assert data.metadata.signed_at is None
+    assert data.verify_signature(identity.validate)
+
+
+def test_freshness_key_requires_signature(identity):
+    """An unsigned timestamp/sequence is attacker-controlled → no ordering key."""
+    unsigned = Data.new(name=Name(rns_addr(), [b"d"]), content=b"x").with_sequence(5)
+    unsigned.metadata.signed_at = 100
+    assert unsigned.freshness_key() is None
+
+    signed = Data.new(name=Name(rns_addr(), [b"d"]), content=b"x").with_sequence(5)
+    signed.sign(identity.sign, signed_at=100)
+    assert signed.freshness_key() == (100, 5)
+
+
 def test_wrong_key_fails_verification(identity):
     name = Name(rns_addr(), [b"doc"])
     data = Data.new(name=name, content=b"hello").sign(identity.sign)
@@ -97,6 +162,24 @@ def test_content_store_persists_signature(tmp_path, identity):
     assert got.verify_signature(identity.validate)
 
 
+def test_content_store_persists_signed_envelope(tmp_path, identity):
+    """signed_at survives the store round-trip, so cached signed Data re-verifies
+    (the signature covers signed_at — dropping it would break verification)."""
+    cs = ContentStore(str(tmp_path / "cs.db"), max_entries=10, default_ttl=86400)
+    name = Name(rns_addr(), [b"doc"])
+    data = Data.new(name=name, content=b"cached").with_sequence(4).sign(
+        identity.sign, signed_at=777
+    )
+
+    cs.insert(name, data)
+    got = cs.get(name)
+
+    assert got is not None
+    assert got.metadata.signed_at == 777
+    assert got.metadata.sequence == 4
+    assert got.verify_signature(identity.validate)
+
+
 def test_content_store_unsigned_stays_unsigned(tmp_path):
     cs = ContentStore(str(tmp_path / "cs.db"), max_entries=10, default_ttl=86400)
     name = Name(rns_addr(), [b"doc"])
@@ -120,6 +203,14 @@ class _ClientForPolicy:
     # Borrow the real method under test without constructing a full ICNClient.
     from rns_icn.client import ICNClient as _C
     _check_signature = _C._check_signature
+    _check_rollback = _C._check_rollback
+
+
+def _rollback_client(reject_rollback: bool):
+    client = object.__new__(_ClientForPolicy)
+    client.config = ClientConfig(reject_rollback=reject_rollback)
+    client._seen_signed_key = {}
+    return client
 
 
 @pytest.fixture
@@ -178,6 +269,69 @@ def test_policy_unknown_key_rejected_when_strict(not_recallable, identity):
 def test_policy_unknown_key_accepted_when_not_strict(not_recallable, identity):
     ok, err = _client(require_signature=False)._check_signature(_signed(identity))
     assert ok and err is None
+
+
+# ── Rollback protection (Phase 3.1: authenticated signed_at/sequence) ──
+
+
+def _signed_seq(identity, seq: int, signed_at: int) -> Data:
+    name = Name(rns_addr(), [b"doc"])
+    return Data.new(name=name, content=f"v{seq}".encode()).with_sequence(seq).sign(
+        identity.sign, signed_at=signed_at
+    )
+
+
+def test_rollback_rejected_when_enabled(identity):
+    client = _rollback_client(reject_rollback=True)
+    newer = _signed_seq(identity, seq=5, signed_at=2000)
+    older = _signed_seq(identity, seq=4, signed_at=1000)
+
+    ok, _ = client._check_rollback(newer)
+    assert ok
+    ok, err = client._check_rollback(older)
+    assert not ok and err is not None
+
+
+def test_rollback_allows_same_and_newer(identity):
+    client = _rollback_client(reject_rollback=True)
+    first = _signed_seq(identity, seq=5, signed_at=2000)
+    assert client._check_rollback(first)[0]
+    # Re-delivery of the same version is fine (not a rollback).
+    assert client._check_rollback(first)[0]
+    # A genuinely newer version advances the watermark.
+    assert client._check_rollback(_signed_seq(identity, seq=6, signed_at=3000))[0]
+
+
+def test_rollback_ignored_when_disabled(identity):
+    client = _rollback_client(reject_rollback=False)
+    assert client._check_rollback(_signed_seq(identity, seq=5, signed_at=2000))[0]
+    # Older version still accepted because the guard is off.
+    assert client._check_rollback(_signed_seq(identity, seq=4, signed_at=1000))[0]
+
+
+def test_rollback_ignores_unsigned_data(identity):
+    """Unsigned Data has no trustworthy key, so it bypasses the guard entirely."""
+    client = _rollback_client(reject_rollback=True)
+    name = Name(rns_addr(), [b"doc"])
+    unsigned_new = Data.new(name=name, content=b"x").with_sequence(5)
+    unsigned_new.metadata.signed_at = 2000
+    unsigned_old = Data.new(name=name, content=b"y").with_sequence(1)
+    unsigned_old.metadata.signed_at = 10
+    assert client._check_rollback(unsigned_new)[0]
+    assert client._check_rollback(unsigned_old)[0]
+
+
+def test_rollback_is_per_name(identity):
+    client = _rollback_client(reject_rollback=True)
+    a_new = Data.new(name=Name(rns_addr(), [b"a"]), content=b"x").with_sequence(5).sign(
+        identity.sign, signed_at=2000
+    )
+    b_old = Data.new(name=Name(rns_addr(), [b"b"]), content=b"y").with_sequence(1).sign(
+        identity.sign, signed_at=1
+    )
+    assert client._check_rollback(a_new)[0]
+    # A different name with a low key is not a rollback of /a.
+    assert client._check_rollback(b_old)[0]
 
 
 # ── Per-chunk signatures (Phase 3.2: resource_transport / streamed files) ──
