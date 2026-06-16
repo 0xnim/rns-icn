@@ -1,7 +1,7 @@
 # rns-icn Protocol Specification
 
 **Wire generation:** 1 (as implemented in rns-icn 0.1.0, unpublished — the `0.x`
-wire is unstable; see [§19](#19-versioning-and-forward-compatibility))
+wire is unstable; see [§17](#17-versioning-and-forward-compatibility))
 **Status:** Reference specification. This document is normative and is written to
 match the reference implementation in this repository. Where this document and
 the code disagree, that is a bug in one of them — please file an issue.
@@ -9,7 +9,7 @@ the code disagree, that is a bug in one of them — please file an issue.
 Information-Centric Networking (ICN) over [Reticulum](https://reticulum.network/):
 consumers express **Interests** for named content and receive verified **Data**
 in return, with content-addressed caching, multi-hop forwarding, producer
-authentication, key rotation/revocation, and name-based access control.
+authentication, and name-based access control.
 
 ## Table of contents
 
@@ -23,17 +23,15 @@ authentication, key rotation/revocation, and name-based access control.
 8. [Data](#8-data)
 9. [Control packets](#9-control-packets)
 10. [Cryptographic constructions](#10-cryptographic-constructions)
-11. [Producer key rotation](#11-producer-key-rotation)
-12. [Key revocation](#12-key-revocation)
-13. [Access control](#13-access-control)
-14. [Forwarding semantics](#14-forwarding-semantics)
-15. [Cache coherency](#15-cache-coherency)
-16. [Reserved names](#16-reserved-names)
-17. [Manifests](#17-manifests)
-18. [Large content](#18-large-content)
-19. [Versioning and forward compatibility](#19-versioning-and-forward-compatibility)
-20. [Security model](#20-security-model)
-21. [Constant reference](#21-constant-reference)
+11. [Access control](#11-access-control)
+12. [Forwarding semantics](#12-forwarding-semantics)
+13. [Cache coherency](#13-cache-coherency)
+14. [Reserved names](#14-reserved-names)
+15. [Manifests](#15-manifests)
+16. [Large content](#16-large-content)
+17. [Versioning and forward compatibility](#17-versioning-and-forward-compatibility)
+18. [Security model](#18-security-model)
+19. [Constant reference](#19-constant-reference)
 
 ---
 
@@ -69,8 +67,8 @@ The protocol is the classic NDN/CCN triad plus security and transport layers:
 |-------|------|
 | **Naming** | Self-certifying `/<producer>/<label…>` names ([§5](#5-names)) |
 | **Packets** | Interest / Data + control packets ([§6](#6-packet-framing)–[§9](#9-control-packets)) |
-| **Security** | Producer signatures, key rotation/revocation, access control ([§10](#10-cryptographic-constructions)–[§13](#13-access-control)) |
-| **Forwarding** | Content Store (CS), Pending Interest Table (PIT), Forwarding Information Base (FIB) ([§14](#14-forwarding-semantics)) |
+| **Security** | Producer signatures, access control ([§10](#10-cryptographic-constructions)–[§11](#11-access-control)) |
+| **Forwarding** | Content Store (CS), Pending Interest Table (PIT), Forwarding Information Base (FIB) ([§12](#12-forwarding-semantics)) |
 | **Transport** | RNS encrypted `Link` + `Channel`, `Resource` for large content ([§3](#3-transport-binding-rns)) |
 
 A **producer** owns a namespace (its RNS identity). It signs the Data it
@@ -87,7 +85,7 @@ ICN packets are carried over Reticulum, which provides the encrypted,
 authenticated, multi-hop substrate. ICN does **not** define its own link
 encryption; confidentiality of the *path* is provided by RNS, and
 confidentiality of *content at rest in caches* is provided by ICN access
-control ([§13](#13-access-control)).
+control ([§11](#11-access-control)).
 
 * Each ICN **face** is an RNS `Link` (Curve25519 + AES, established between two
   endpoints' `Destination`s on the `icn` app namespace).
@@ -98,7 +96,7 @@ control ([§13](#13-access-control)).
 * A single Data packet whose serialized size exceeds a node's
   `resource_threshold` (default **100 000 bytes**) **SHOULD** instead be sent as
   an **RNS `Resource`**, whose payload is the ICN Data bytes prefixed with a
-  one-byte type tag `0x49` (`'I'`) ([§18](#18-large-content)). `Resource`
+  one-byte type tag `0x49` (`'I'`) ([§16](#16-large-content)). `Resource`
   handles segmentation and retransmission of large transfers.
 
 A receiver demultiplexes by the first payload byte: a `Channel` message and an
@@ -159,9 +157,8 @@ The producer address is the **truncated BLAKE2b hash of the producer's RNS
 public key** (an RNS identity hash). The name therefore *is* the key: any party
 can confirm that a given public key is authoritative for a namespace by hashing
 it and comparing to the address — no PKI, no recall, fully offline. This
-property underpins signature verification ([§10.2](#102-data-signature-envelope)),
-key rotation ([§11](#11-producer-key-rotation)), and capability anchoring
-([§13](#13-access-control)).
+property underpins signature verification ([§10.2](#102-data-signature-envelope))
+and capability anchoring ([§11](#11-access-control)).
 
 ### 5.3 Display form
 
@@ -200,7 +197,7 @@ The `version` byte is the **wire generation** and is the same for all packet
 types; the current value is `1`. A receiver **MUST** reject a packet whose
 `version` it does not implement — including one read from cache or relayed by a
 peer — rather than attempt to parse it (see
-[§19](#19-versioning-and-forward-compatibility)). An unknown type byte **MUST**
+[§17](#17-versioning-and-forward-compatibility)). An unknown type byte **MUST**
 likewise be rejected. There is no separate length prefix at the framing layer:
 the transport (`Channel`/`Resource`) delivers whole packets.
 
@@ -228,7 +225,7 @@ the transport (`Channel`/`Resource`) delivers whole packets.
 | 3 | `0x08` | `has_hop_limit` — a 1-byte hop limit follows |
 
 * `nonce` is 8 random bytes; it is the per-Interest identifier used for loop /
-  duplicate suppression ([§14.2](#142-loop-and-duplicate-suppression)).
+  duplicate suppression ([§12.2](#122-loop-and-duplicate-suppression)).
 * `lifetime_ms` is the Interest's lifetime (default 4000). It bounds how long a
   PIT entry and the consumer's wait persist.
 * **Selector** (when present): `min_sequence:u64` — only Data with
@@ -261,7 +258,7 @@ the transport (`Channel`/`Resource`) delivers whole packets.
 | 1 | `0x02` | `has_signature` — a 64-byte Ed25519 signature follows |
 
 `content` is the opaque payload. When the Data is encrypted
-([§13](#13-access-control)) `content` is ciphertext; the content hash and
+([§11](#11-access-control)) `content` is ciphertext; the content hash and
 signature are computed over the **ciphertext**, so forwarders cache, verify, and
 relay restricted Data without being able to read it.
 
@@ -284,14 +281,14 @@ Fields appear in the order above (ascending bit index).
 | 0 | `0x01` | `content_hash` | BLAKE2b-32 of `content`. Enables content-addressed verification. |
 | 1 | `0x02` | `sequence` | Producer-assigned monotonic version/segment number. |
 | 2 | `0x04` | *staleness* | When set, the Data is **stale** and `age_seconds` follows. When clear, the Data is fresh and no age field is present. |
-| 3 | `0x08` | `freshness_period` | Seconds the Data stays fresh in a cache ([§15](#15-cache-coherency)). |
+| 3 | `0x08` | `freshness_period` | Seconds the Data stays fresh in a cache ([§13](#13-cache-coherency)). |
 | 4 | `0x10` | `signed_at` | Unix seconds the producer signed at ([§10.2](#102-data-signature-envelope)). |
-| 5 | `0x20` | `encrypted` | `content` is ciphertext for a restricted prefix ([§13](#13-access-control)). No body bytes. |
+| 5 | `0x20` | `encrypted` | `content` is ciphertext for a restricted prefix ([§11](#11-access-control)). No body bytes. |
 
 A decoder **MUST** tolerate unknown high metadata-flag bits only insofar as it
 can still locate the fields it understands; because field presence is
 positional, undefined bits in this version have no associated body and parsers
-written to this spec ignore them. See [§19](#19-versioning-and-forward-compatibility).
+written to this spec ignore them. See [§17](#17-versioning-and-forward-compatibility).
 
 ### 8.2 Content hash verification
 
@@ -355,7 +352,7 @@ This is the protocol's capability-negotiation surface. The `version` byte here
 carries the same wire generation as every other packet ([§6](#6-packet-framing));
 the `features` bitmask is the orthogonal capability-advertisement channel, letting
 peers light up optional behaviour without a version bump (see
-[§19](#19-versioning-and-forward-compatibility)).
+[§17](#17-versioning-and-forward-compatibility)).
 
 ### 9.4 Invalidate (`0x06`)
 
@@ -387,7 +384,7 @@ Signature input is defined in [§10.3](#103-other-signed-objects).
 
 `H(x) = BLAKE2b(x, digest_size=32)`. Used for content addressing
 ([§8.2](#82-content-hash-verification)), chunk integrity
-([§18](#18-large-content)), and as the building block of the producer's identity
+([§16](#16-large-content)), and as the building block of the producer's identity
 hash (the producer address).
 
 ### 10.2 Data signature envelope
@@ -417,18 +414,18 @@ Design notes (normative for interoperability):
   **MUST** include a field's bytes iff that field is set on the Data.
 * Because optional fields are *appended*, a signature produced before a field
   existed still verifies once that field is absent — this is the forward-compat
-  rule in [§19](#19-versioning-and-forward-compatibility). Concretely, a signature
+  rule in [§17](#17-versioning-and-forward-compatibility). Concretely, a signature
   over `name || content || content_hash` alone remains valid.
 * `sequence`, `signed_at`, and `encrypted` are therefore **authenticated**:
   stripping or altering any of them breaks the signature. This is what lets a
   consumer trust `signed_at`/`sequence` for rollback detection
-  ([§15.2](#152-rollback-protection)) and trust the `encrypted` flag
-  ([§13](#13-access-control)).
+  ([§13.2](#132-rollback-protection)) and trust the `encrypted` flag
+  ([§11](#11-access-control)).
 * `H_data` is prefixed with the domain tag `b"icn-data\x01"` so a Data signature
   can never be replayed as another signed object (and vice versa). The tag is part
   of the signed bytes, not the wire framing; changing it is a signed-bytes
   generation change governed by the version rule in
-  [§19](#19-versioning-and-forward-compatibility).
+  [§17](#17-versioning-and-forward-compatibility).
 
 A consumer verifies by recomputing `H_data` and checking the signature against
 an authorized producer key ([§10.4](#104-resolving-an-authorized-producer-key)).
@@ -438,9 +435,7 @@ an authorized producer key ([§10.4](#104-resolving-an-authorized-producer-key))
 | Object | Signed hash input | Signer |
 |--------|-------------------|--------|
 | Invalidate | `BLAKE2b32( b"icn-invalidate\x01" \|\| name.to_bytes() \|\| u64(epoch) \|\| (0x01 if is_prefix else 0x00) )` | producer |
-| KeyRotation | [§11.1](#111-rotation-certificate) | previous key |
-| Revocation | [§12](#12-key-revocation) | anchor key |
-| Capability | [§13.3](#133-capability-token) | producer signing key |
+| Capability | [§11.3](#113-capability-token) | producer signing key |
 
 Every producer-signed object prepends a distinct **domain-separation tag** so a
 signature over one can never be replayed as another:
@@ -449,21 +444,15 @@ signature over one can never be replayed as another:
 |--------|-----------|
 | Data | `b"icn-data\x01"` |
 | Invalidate | `b"icn-invalidate\x01"` |
-| KeyRotation | `b"icn-key-rotation\x01"` |
-| Revocation | `b"icn-key-revocation\x01"` |
 | Capability | `b"icn-capability\x01"` |
 | Content-key derivation | `b"icn-content-key\x01"` |
 
 ### 10.4 Resolving an authorized producer key
 
-To verify any producer signature for address `A`, a verifier obtains the set of
-public keys authorized to sign for `A`, in priority order:
-
-1. **Rotation chain** (if held for `A`): the authorized set is computed from the
-   chain and revocations ([§11](#11-producer-key-rotation),
-   [§12](#12-key-revocation)). Self-certifying — no network needed.
-2. **RNS recall**: recall the identity for `A` from the mesh (`A` is an identity
-   hash) and use its key.
+To verify any producer signature for address `A`, a verifier recalls the RNS
+identity for `A` from the mesh (`A` is an identity hash) and uses its public key.
+The name is self-certifying, so the authorized key is exactly the one whose hash
+is `A` — there is no delegation or key-history to consult.
 
 A present-but-invalid signature **MUST** always be rejected. Policy for
 *unsigned* or *unverifiable* Data (`require_signature`) is a local consumer
@@ -471,134 +460,19 @@ decision: verify-if-present by default, or strict rejection.
 
 ---
 
-## 11. Producer key rotation
-
-A producer cannot simply swap keys: the name *is* the key hash
-([§5.2](#52-self-certifying-addressing)). Instead the producer issues a chain of
-signed **rotation certificates** delegating from the anchor key (whose hash is
-the producer address) to a new key, that key to the next, and so on. This
-delivers key **continuity**: a valid chain *widens* the set of keys authorized
-to sign for the namespace, so content signed by any generation still verifies
-and caches are not invalidated by a rotation.
-
-### 11.1 Rotation certificate
-
-```
-[producer:16]
-[epoch:u64]
-[prev_public_key:64]
-[new_public_key:64]
-[has_sig:u8]            # 0x00 / 0x01
-( [signature:64] )?     # iff has_sig
-```
-
-* `epoch` starts at 1 and increments by exactly 1 per link.
-* Public keys are 64 bytes: 32-byte X25519 ‖ 32-byte Ed25519 (the RNS public
-  key).
-* **Signed hash:**
-  `BLAKE2b32( b"icn-key-rotation\x01" || producer || u64(epoch) || prev_public_key || new_public_key )`,
-  signed by **`prev_public_key`** (the delegating key).
-
-### 11.2 Chain verification
-
-Given `producer_addr` and an ordered list of certificates, a verifier **MUST**:
-
-1. Return the empty set for an empty chain.
-2. Let `anchor = certs[0].prev_public_key`; reject unless
-   `truncated_BLAKE2b_hash(anchor) == producer_addr` (anchor binds to the name).
-3. For each cert at index `i` (0-based):
-   * reject unless `cert.producer == producer_addr`;
-   * reject unless `cert.epoch == i + 1` (contiguous);
-   * reject unless `cert.prev_public_key == expected_prev` (chained), where
-     `expected_prev` is the anchor for `i == 0` else the previous cert's
-     `new_public_key`;
-   * reject unless the cert signature verifies against `cert.prev_public_key`.
-4. The authorized set is `[anchor, certs[0].new, certs[1].new, …]`, then reduced
-   by any revocations ([§12](#12-key-revocation)).
-
-### 11.3 Rotation bundle
-
-The unit distributed over the mesh and persisted to disk; carries a chain plus
-its revocations.
-
-```
-[ncerts:u16]
-( [cert_len:u16][cert:cert_len] ) × ncerts          # §11.1
-( [nrev:u16]                                          # OPTIONAL section
-  ( [rev_len:u16][rev:rev_len] ) × nrev )?            # §12
-```
-
-The revocation section is OPTIONAL: a bundle with no revocation section is
-identical on the wire to a bare chain (`[ncerts] [certs…]`), and a reader for
-the bare-chain form ignores any trailing revocation section. Old and new files
-therefore interoperate (see [§19](#19-versioning-and-forward-compatibility)).
-
-A producer publishes its bundle as **self-verifying Data** at the reserved name
-`/<producer>/_rotation` ([§16](#16-reserved-names)). The bundle carries **no
-producer Data signature** — it authenticates itself via its certificate chain —
-so a consumer fetching it **MUST** verify it anchors to the requested producer
-([§11.2](#112-chain-verification)) and **MUST NOT** rely on a Data-layer
-signature.
-
----
-
-## 12. Key revocation
-
-Revocation is the *shrinking* counterpart to rotation: it removes a compromised
-key from the authorized set. Only the **anchor** (the namespace root of trust)
-may revoke.
-
-### 12.1 Revocation certificate
-
-```
-[producer:16]
-[revoked_at:u64]
-[anchor_public_key:64]
-[revoked_public_key:64]
-[has_sig:u8]
-( [signature:64] )?     # iff has_sig
-```
-
-* **Signed hash:**
-  `BLAKE2b32( b"icn-key-revocation\x01" || producer || u64(revoked_at) || anchor_public_key || revoked_public_key )`,
-  signed by `anchor_public_key`.
-* `revoked_at` is unix seconds, for audit/ordering.
-
-### 12.2 Applying revocations
-
-When reducing the authorized set ([§11.2](#112-chain-verification) step 4), for
-each revocation a verifier **MUST**:
-
-* reject unless `revocation.producer == producer_addr`;
-* reject unless `revocation.anchor_public_key == anchor` (the chain anchor);
-* reject unless the revocation signature verifies.
-
-Then it computes the **revoked closure**: start with each `revoked_public_key`,
-and walking the chain in epoch order, additionally revoke `cert.new_public_key`
-of any cert whose `cert.prev_public_key` is already revoked. (A compromised key
-could have minted rogue delegations, so its entire delegated sub-branch is
-revoked.) The final authorized set is the rotation set minus the revoked
-closure.
-
-> **Note:** revocation intentionally breaks continuity for the revoked branch —
-> content previously signed by a now-revoked key stops verifying. That is the
-> correct compromise response, and the opposite of routine rotation.
-
----
-
-## 13. Access control
+## 11. Access control
 
 Because content lives in caches the producer does not control, access control
 is enforced by **encryption**, not by withholding service (NDN-NAC style).
 
-### 13.1 Per-prefix policy
+### 11.1 Per-prefix policy
 
 A producer declares, per name prefix, the set of consumer identities allowed to
 read it (an ACL). Content published under a restricted prefix is encrypted; all
 other content is plaintext. When prefixes overlap, the **longest matching
 prefix** governs.
 
-### 13.2 Content encryption
+### 11.2 Content encryption
 
 * **Content-encryption key (CEK):** derived deterministically from the
   producer's private key and the restricted prefix:
@@ -616,7 +490,7 @@ prefix** governs.
 * Caches store, verify (hash + signature over ciphertext), and relay restricted
   Data unchanged.
 
-### 13.3 Capability token
+### 11.3 Capability token
 
 To read restricted content, a consumer needs the CEK. The producer issues a
 **capability**: a signed grant binding a consumer to a prefix for a validity
@@ -638,10 +512,10 @@ window, carrying the CEK **wrapped to the consumer's RNS identity** (ECIES via
   `producer`).
 * **Signed hash:**
   `BLAKE2b32( b"icn-capability\x01" || producer || consumer || u64(issued_at) || u64(expires_at) || u16(len(prefix_bytes)) || prefix_bytes || u16(len(wrapped_cek)) || wrapped_cek )`,
-  signed by the producer's signing key (which MAY be a rotation-delegated key,
-  so consumers verify it via [§10.4](#104-resolving-an-authorized-producer-key)).
+  signed by the producer's signing key, which consumers verify via
+  [§10.4](#104-resolving-an-authorized-producer-key).
 
-### 13.4 Consumer procedure
+### 11.4 Consumer procedure
 
 On receiving encrypted Data, a consumer with a capability:
 
@@ -663,12 +537,12 @@ checked offline. A consumer without a usable capability keeps the ciphertext
 
 ---
 
-## 14. Forwarding semantics
+## 12. Forwarding semantics
 
 A forwarder maintains three tables: the **Content Store (CS)**, the **Pending
 Interest Table (PIT)**, and the **Forwarding Information Base (FIB)**.
 
-### 14.1 Interest processing
+### 12.1 Interest processing
 
 On receiving an Interest on `in_face`, a forwarder:
 
@@ -680,7 +554,7 @@ On receiving an Interest on `in_face`, a forwarder:
 5. **Strategy decision** over (CS hit, PIT hit, FIB faces), yielding one of:
    * **serve from cache** — return the cached Data;
    * **serve stale, revalidate** — return the stale cached Data now and fire a
-     single background refresh ([§15](#15-cache-coherency));
+     single background refresh ([§13](#13-cache-coherency));
    * **suppress / aggregate** — an equivalent Interest is already pending; attach
      to it and wait, rather than forwarding a duplicate;
    * **forward** — forward to a next-hop face;
@@ -688,14 +562,14 @@ On receiving an Interest on `in_face`, a forwarder:
 
 `must_be_fresh` Interests **MUST NOT** be satisfied by a stale CS entry.
 
-### 14.2 Loop and duplicate suppression
+### 12.2 Loop and duplicate suppression
 
 Loop suppression is by `(in_face, nonce)`. Independently, the **hop limit**
 ([§7](#7-interest)) bounds propagation: a forwarder decrements it before
 forwarding and drops the Interest when it reaches 0 (CS/PIT satisfaction still
 applies first).
 
-### 14.3 Forwarding and the reverse path
+### 12.3 Forwarding and the reverse path
 
 When forwarding, the forwarder records a PIT entry mapping the name to the
 `in_face` (aggregating if one exists) and the chosen `out_face`, then sends the
@@ -705,7 +579,7 @@ faces, inserted into the CS, and the PIT entry is satisfied. A PIT entry that is
 not satisfied within the Interest lifetime expires; the strategy MAY record the
 failure against the out-face for future route selection.
 
-### 14.4 Data processing
+### 12.4 Data processing
 
 Data received on a face that matches a pending PIT entry is delivered to every
 aggregated downstream face, cached in the Content Store, and the PIT entry is
@@ -724,18 +598,18 @@ own.
 
 ---
 
-## 15. Cache coherency
+## 13. Cache coherency
 
-### 15.1 Freshness
+### 13.1 Freshness
 
 A Data MAY declare a `freshness_period` (seconds). A cache treats the entry as
 fresh until it has been held longer than the period, then **stale**. A stale
-entry MAY still be served per strategy ([§15.3](#153-stale-while-revalidate))
+entry MAY still be served per strategy ([§13.3](#133-stale-while-revalidate))
 but never to a `must_be_fresh` Interest. Independently, the CS enforces a
 storage TTL (configurable, per-prefix overrides) and LRU eviction; these are
 local policy, not on-wire.
 
-### 15.2 Rollback protection
+### 13.2 Rollback protection
 
 `signed_at` and `sequence` are authenticated ([§10.2](#102-data-signature-envelope)),
 so a consumer MAY track the highest `(signed_at, sequence)` it has accepted per
@@ -743,14 +617,14 @@ name and reject Data that rolls back to an older signed version — defeating a
 cache/relay replaying stale-but-validly-signed content. This applies only to
 signed Data (an unsigned timestamp is attacker-controlled).
 
-### 15.3 Stale-while-revalidate
+### 13.3 Stale-while-revalidate
 
 A cache MAY be configured with a stale-while-revalidate window: within it, a
 stale hit is served immediately while a single background revalidation refreshes
 the entry upstream (deduplicated per name). Outside the window, a stale entry is
 revalidated before serving (or the Interest is forwarded).
 
-### 15.4 Invalidation
+### 13.4 Invalidation
 
 A producer MAY actively purge cached content with a signed Invalidate
 ([§9.4](#94-invalidate-0x06)), subject to signature verification and
@@ -758,21 +632,20 @@ epoch-replay protection.
 
 ---
 
-## 16. Reserved names
+## 14. Reserved names
 
 These labels under a producer's namespace have defined meaning:
 
 | Name | Content | Signed? |
 |------|---------|---------|
-| `/<producer>/manifest` | Content manifest, JSON ([§17](#17-manifests)) | producer-signed Data |
-| `/<producer>/_rotation` | Rotation bundle, binary ([§11.3](#113-rotation-bundle)) | self-verifying (no Data sig) |
+| `/<producer>/manifest` | Content manifest, JSON ([§15](#15-manifests)) | producer-signed Data |
 | `/<producer>/health` | Health/status JSON | unsigned Data |
 
 Producers **SHOULD NOT** publish ordinary content under these labels.
 
 ---
 
-## 17. Manifests
+## 15. Manifests
 
 A manifest is a producer-signed index published as Data at
 `/<producer>/manifest`, encoded as compact JSON (UTF-8). It is versioned by a
@@ -804,7 +677,7 @@ A `manifest`-kind entry references a downstream peer's manifest, enabling
 hierarchical content directories across propagation nodes. The reader **MUST**
 verify the Data content hash when present.
 
-A **content manifest** (for chunked large content, [§18](#18-large-content)) is
+A **content manifest** (for chunked large content, [§16](#16-large-content)) is
 a distinct JSON object published as Data at the content's own name:
 
 ```jsonc
@@ -820,9 +693,9 @@ a distinct JSON object published as Data at the content's own name:
 ```
 
 JSON is used for debug-readability; a future revision MAY define a binary
-encoding (see [§19](#19-versioning-and-forward-compatibility)).
+encoding (see [§17](#17-versioning-and-forward-compatibility)).
 
-### 17.1 Streams
+### 15.1 Streams
 
 A *stream* is a sequence of Data segments published under child names of a stream
 prefix, each carrying a monotonic `sequence`. A consumer fetches incrementally
@@ -832,7 +705,7 @@ segments to subscribers via APS ([§9.1](#91-aps-subscribe-0x03)).
 
 ---
 
-## 18. Large content
+## 16. Large content
 
 Content larger than a node's `resource_threshold` (default 100 000 bytes) is
 handled in one of two complementary ways:
@@ -843,7 +716,7 @@ handled in one of two complementary ways:
 * **Chunking** — content is split into chunks (default 64 KiB) under child names
   `/<producer>/<path…>/chunk_NNNN?hash=<chunk_hash>`, each an independently
   hashed (and OPTIONALLY signed) Data packet, indexed by a content manifest
-  ([§17](#17-manifests)). A consumer fetches the manifest, then each chunk,
+  ([§15](#15-manifests)). A consumer fetches the manifest, then each chunk,
   verifies each chunk against its `content_hash`, verifies any per-chunk
   producer signature, and reassembles in sequence order; it MAY also verify the
   whole against the manifest's overall `content_hash`.
@@ -855,7 +728,7 @@ chunks.
 
 ---
 
-## 19. Versioning and forward compatibility
+## 17. Versioning and forward compatibility
 
 Every packet carries an explicit **wire-generation version** ([§6](#6-packet-framing)),
 and the protocol additionally evolves by **append-only extension** within a
@@ -889,8 +762,8 @@ rules.
   cannot reconstruct the identical envelope. A verifier **MUST** compute the
   envelope exactly as in [§10.2](#102-data-signature-envelope) for the fields
   present on the Data it holds.
-* **Bundle/structured blobs** ([§11.3](#113-rotation-bundle)) use optional
-  trailing sections so older and newer encoders/decoders interoperate.
+* **Structured blobs** (e.g. the content manifest, [§15](#15-manifests)) use
+  optional trailing fields so older and newer encoders/decoders interoperate.
 * **Negotiated capabilities** — peer role and optional-feature support are
   exchanged via the Capability Peer `features` bitmask
   ([§9.3](#93-capability-peer-0x05)). Optional behaviour is gated by a feature
@@ -919,7 +792,7 @@ rules.
 
 ---
 
-## 20. Security model
+## 18. Security model
 
 **Trust anchor.** A name is self-certifying: the producer address is the hash of
 the producer's public key ([§5.2](#52-self-certifying-addressing)). Trust in a
@@ -931,16 +804,16 @@ content* and the authenticated metadata (`sequence`, `signed_at`, `encrypted`).
 It defends against cache poisoning (a relay serving forged content under a
 producer's name) and, via `signed_at`/`sequence`, against rollback.
 
-**Key lifecycle.** A producer rotates keys via a self-certifying delegation
-chain ([§11](#11-producer-key-rotation)) — verifiable entirely offline because
-the anchor binds to the name — and revokes a compromised key (and its delegated
-sub-branch) via an anchor-signed revocation ([§12](#12-key-revocation)). The
-anchor key is the ultimate authority for the namespace; if the anchor key is
-compromised, the namespace is compromised (inherent to self-certifying names).
+**Key lifecycle.** A name binds to exactly one producer key — the key whose hash
+is the address ([§5.2](#52-self-certifying-addressing)). There is no in-protocol
+key rotation or revocation: the producer key is the single, permanent authority
+for its namespace. If that key is lost or compromised, the namespace is lost with
+it (inherent to self-certifying names); recovery means publishing under a new
+name (a new key) and re-establishing trust out of band.
 
 **Confidentiality.** Path confidentiality is provided by RNS link encryption.
 Content confidentiality at rest in caches is provided by ICN access control
-([§13](#13-access-control)): restricted content is encrypted with a
+([§11](#11-access-control)): restricted content is encrypted with a
 producer-derived CEK, delivered to authorized consumers via capabilities, and
 decryption fails closed.
 
@@ -958,11 +831,12 @@ drive an allocation before it is validated.
 
 **Residual risks / non-goals.** This version does not provide consumer anonymity
 (an observer of a face sees the names requested, modulo RNS path encryption),
-traffic-analysis resistance, or protection against a compromised anchor key.
+traffic-analysis resistance, or recovery from a lost or compromised producer key
+(self-certifying names have no rotation; the remedy is a new name).
 
 ---
 
-## 21. Constant reference
+## 19. Constant reference
 
 | Constant | Value | Meaning |
 |----------|-------|---------|
@@ -983,5 +857,5 @@ traffic-analysis resistance, or protection against a compromised anchor key.
 **Packet types:** `0x01` Interest, `0x02` Data, `0x03` APS Subscribe,
 `0x04` Propagation Peer, `0x05` Capability Peer, `0x06` Invalidate.
 
-**Domain tags:** `icn-data\x01`, `icn-invalidate\x01`, `icn-key-rotation\x01`,
-`icn-key-revocation\x01`, `icn-capability\x01`, `icn-content-key\x01`.
+**Domain tags:** `icn-data\x01`, `icn-invalidate\x01`, `icn-capability\x01`,
+`icn-content-key\x01`.

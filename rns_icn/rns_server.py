@@ -90,18 +90,13 @@ class ICNServer(BaseICNServer):
         self.app_name = config.app_name
         self.aspect = config.aspect
 
-        # Signing identity: the anchor identity by default, or a separate
-        # delegated key for key rotation (the namespace/destination stays the
-        # anchor; clients verify the delegated key via the producer's rotation
-        # chain — see rns_icn.rotation).
-        if config.signing_identity_path:
-            self.signing_identity = load_or_create_identity(config.signing_identity_path)
-        else:
-            self.signing_identity = identity
+        # The producer signs originated Data with its own (self-certifying)
+        # identity: the name is the hash of this key, so consumers verify by
+        # recalling it. The attribute is kept for the signer/capability paths.
+        self.signing_identity = identity
 
-        # Base ICNServer uses the 16-byte RNS address (the anchor); pass the
-        # signing identity's Ed25519 signer so origin-produced Data is signed
-        # (Phase 3.1/3.2).
+        # Base ICNServer uses the 16-byte RNS address; pass the identity's
+        # Ed25519 signer so origin-produced Data is signed (Phase 3.1/3.2).
         super().__init__(
             self.identity.hash,
             cs_max=config.cs_max_entries,
@@ -129,7 +124,7 @@ class ICNServer(BaseICNServer):
         # Per-prefix access control (Phase 3.3): builds an AccessController from
         # config.access_rules so restricted prefixes are encrypted at publish and
         # capabilities can be issued to authorized consumers. The CEK is derived
-        # from the anchor identity (the namespace owner).
+        # from the producer identity (the namespace owner).
         self._access = access.AccessController(
             producer_identity=self.identity,
             producer_addr=self.rns_addr,
@@ -214,13 +209,6 @@ class ICNServer(BaseICNServer):
             self.aspect,
         )
         self.destination.set_link_established_callback(self._on_incoming_link)
-
-        # Publish our rotation bundle (if configured) so peers can fetch our
-        # authorized signing keys + revocations over the mesh.
-        try:
-            self.publish_rotation_bundle()
-        except Exception as e:
-            RNS.log(f"ICN: Failed to publish rotation bundle: {e}", RNS.LOG_ERROR)
 
         # Start link pool (handles outbound links)
         await self._link_pool.start()
@@ -485,28 +473,6 @@ class ICNServer(BaseICNServer):
         data.with_sequence(manifest.sequence)
         self.forwarder.cs.insert(data.name, data)
         RNS.log(f"ICN: Published manifest with {len(entries)} entries")
-
-    def publish_rotation_bundle(self) -> None:
-        """Publish this producer's rotation bundle for mesh distribution.
-
-        Loads the configured bundle (chain + revocations), checks it anchors to
-        our own namespace, and stores it as self-verifying Data at
-        ``/<producer>/_rotation`` so peers can fetch our authorized signing keys
-        over the mesh. No-op when ``rotation_chain_path`` is unset.
-        """
-        from . import rotation
-        if not self.config.rotation_chain_path:
-            return
-        bundle = rotation.load_rotation_bundle(self.config.rotation_chain_path)
-        # Fail loudly if the operator points us at someone else's chain.
-        bundle.verify(self.rns_addr)
-        name = rotation.rotation_name(self.rns_addr)
-        data = Data.new(name=name, content=bundle.to_bytes())
-        self.forwarder.cs.insert(name, data)
-        RNS.log(
-            f"ICN: Published rotation bundle ({len(bundle.certs)} certs, "
-            f"{len(bundle.revocations)} revocations)"
-        )
 
     @property
     def hexhash(self) -> str:

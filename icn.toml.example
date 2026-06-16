@@ -41,16 +41,6 @@ require_signature = false
 # Default false (additive rollout).
 reject_rollback = false
 
-# Security: producer key rotation. Each file is a rotation bundle
-# (rns_icn.rotation) for one producer: a signed delegation chain plus any key
-# revocations. The client accepts Data signed by any authorized key (the anchor
-# or a rotated-to key) and rejects keys the producer has revoked, so a producer
-# can change its signing key — or disown a compromised one — without breaking
-# verification. A bare chain file (no revocations) loads fine too. Paths are
-# relative to this config file. The client can also fetch a producer's bundle
-# over the mesh on demand via ICNClient.fetch_rotation_bundle. Default: none.
-# rotation_chains = ["producers/acme.bundle"]
-
 # Security: access control. Capability files (rns_icn.access) grant this client
 # read access to a producer's restricted (encrypted) prefixes. Each capability
 # is signed by the producer and carries the content key wrapped to this client's
@@ -76,19 +66,6 @@ mesh_interfaces = ["UTN Oregon"]
 
 # Server role: ORIGIN, CACHE, or PROPAGATION
 role = "ORIGIN"
-
-# Key rotation: optional separate signing identity. The server keeps its
-# destination/namespace under identity_path (the anchor) but signs originated
-# Data with this delegated key. Pair it with a rotation chain (issued by the
-# anchor) so clients still verify. Default: sign with the anchor identity.
-# signing_identity_path = "/etc/rns-icn/signing_identity"
-
-# Key rotation: optional rotation bundle (chain + revocations) to publish over
-# the mesh. When set, the origin serves it as self-verifying Data at the
-# reserved name /<producer>/_rotation, so peers can fetch this producer's
-# authorized signing keys (and revocations) without out-of-band file exchange.
-# Must anchor to this server's own identity. Default: don't publish a bundle.
-# rotation_chain_path = "/etc/rns-icn/acme.bundle"
 
 # Access control: per-prefix ACLs. Each rule restricts a name prefix to a set of
 # consumer identity hashes. Content published under a restricted prefix is

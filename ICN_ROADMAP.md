@@ -8,7 +8,7 @@
 
 ## Current State
 
-Phases 1 and 2 are complete; Phase 4.1 (protocol versioning) is done and other parts of Phase 4 (pub/sub, chunked transfer) landed early. Phase 3.1 (signed manifests, authenticated sequence/timestamp, key rotation), 3.2 (per-packet/per-chunk producer signatures), 3.3 (access control: per-prefix ACLs, encrypted content, capability tokens), and the key-management half of 3.4 (revocation + mesh distribution of rotation bundles) are implemented. The rest of 3.4 (petnames, TOFU) is **skipped by design** — a global human-readable namespace doesn't fit an offline-first mesh, and a local petname map belongs to the application layer and needs no protocol change (see §3.4). Phase 3 is otherwise complete.
+Phases 1 and 2 are complete; Phase 4.1 (protocol versioning) is done and other parts of Phase 4 (pub/sub, chunked transfer) landed early. Phase 3.1 (signed manifests, authenticated sequence/timestamp), 3.2 (per-packet/per-chunk producer signatures), and 3.3 (access control: per-prefix ACLs, encrypted content, capability tokens) are implemented. Phase 3.4 is **skipped by design** in full: petnames/TOFU don't fit an offline-first mesh (a local petname map belongs to the application layer and needs no protocol change), and key rotation/revocation was **removed** — it added a delegation-chain layer that fought the self-certifying "name *is* the key" model to address planned key hygiene (not anchor-compromise recovery, which it can't provide); a producer key is single-generation and recovery means republishing under a new name out of band (see §3.4). Phase 3 is otherwise complete.
 
 | Component | Status | Gaps |
 |-----------|--------|------|
@@ -16,7 +16,7 @@ Phases 1 and 2 are complete; Phase 4.1 (protocol versioning) is done and other p
 | Link establishment | `LinkPool` w/ reuse, health, announce injection | reconnect is on-use, not proactive |
 | Content store | SQLite + TTL + LRU + crash recovery | — |
 | Forwarding | Multi-hop (FIB/PIT/CS); `icn-router` binary; **cache coherency** (freshness period, stale-while-revalidate, signed invalidation) | no multi-path |
-| Naming | /hash/label, content-hash verified, **Ed25519 producer signatures** (sequence + timestamp authenticated; client rollback protection; **key rotation + anchor-signed revocation** via signed delegation chains, distributed over the mesh as self-verifying bundles); **per-prefix access control** (encrypted content + capability tokens) | petname/TOFU resolution skipped by design |
+| Naming | /hash/label, content-hash verified, **Ed25519 producer signatures** (sequence + timestamp authenticated; client rollback protection); **per-prefix access control** (encrypted content + capability tokens) | petname/TOFU resolution and key rotation/revocation removed by design |
 | API | Per-packet wire version (`[type][version]`) + capability exchange; unknown generation rejected cleanly | — |
 | Operations | TOML config, JSON logs, health + metrics | — |
 
@@ -89,7 +89,7 @@ Phases 1 and 2 are complete; Phase 4.1 (protocol versioning) is done and other p
   (`PacketType.INVALIDATE`), self-certifying via the producer's RNS identity,
   applied to the local store and forwarded one hop with epoch-based replay
   suppression (`ContentStore.invalidate`, `ICNServer.handle_invalidate`/
-  `invalidate`). Mesh-wide flood + revocation hardening deferred to Phase 3.4.
+  `invalidate`). Mesh-wide flood hardening deferred.
 
 **Deliverable:** ✅ `icn-router` binary. Client ↔ Router ↔ Server works over real RNS and content caches at the hop — proven end-to-end by `tests/test_integration.py::TestRNSMultiHop` (three processes, three Reticulum instances over localhost TCP). Cache coherency (§2.4) has landed. **Residual for full Phase 2:** dynamic FIB updates / multi-path (§2.3).
 
@@ -101,18 +101,8 @@ Phases 1 and 2 are complete; Phase 4.1 (protocol versioning) is done and other p
 - [x] Producer keypair (Ed25519) — the producer's RNS identity (`name.rns_addr` is its address)
 - [x] Manifest signing (`ICNServer._maybe_sign` signs origin-owned Data incl. manifests; signs over `name + content + content_hash`)
 - [x] Client validation (`ICNClient._check_signature` recalls producer via `RNS.Identity.recall`, `verify-if-present` + `require_signature` strict mode)
-- [x] Key rotation support (`rns_icn/rotation.py`): a producer issues a signed
-  chain of `KeyRotation` certificates (anchor key → new key → …), each binding
-  the namespace, a monotonic epoch, and the prev/new public keys. Verification
-  is self-certifying and offline — an RNS identity hash *is* the truncated hash
-  of its public key, so the chain anchors by checking the root key hashes to
-  `name.rns_addr` (no recall of the retired key needed). A valid chain widens
-  the set of keys authorized to sign for the namespace; `ICNClient` loads chains
-  from `config.rotation_chains` and `_check_signature` accepts any authorized
-  key, and an origin can sign with a delegated key via
-  `ServerConfig.signing_identity_path` while keeping its anchor namespace.
-  Delivered as key *continuity* (old generations still verify, caches survive a
-  rotation); chain distribution over the mesh and *revocation* landed in §3.4.
+- [ ] ~~Key rotation~~ — **removed by design** (see §3.4). A producer signs with
+  its own self-certifying identity; the name *is* the key.
 - [x] Sequence/timestamp inside the signed envelope: `signed_hash` now binds
   `name + content + content_hash + sequence + signed_at` (the latter two
   domain-tagged and appended, so pre-3.1 signatures still verify). `Data.sign`
@@ -144,8 +134,9 @@ control: the boundary is encryption, not "don't serve it."
 - [x] Access tokens (capability-based): a producer-signed `Capability` binds
   (consumer, prefix, validity) and carries the CEK *wrapped to the consumer's
   RNS identity* (ECIES). The consumer verifies the producer signature
-  (self-certifying, rotation/revocation-aware via `ICNClient._producer_validators`),
-  unwraps the CEK, and `ICNClient._maybe_decrypt` returns plaintext. AEAD +
+  (self-certifying — the key is recalled from the name, via
+  `ICNClient._producer_validators`), unwraps the CEK, and
+  `ICNClient._maybe_decrypt` returns plaintext. AEAD +
   ECIES make decryption fail closed even if a forged capability's signature
   can't be checked offline. Capabilities load from `ClientConfig.capabilities`;
   `ICNServer.issue_capability` mints them. (Mesh distribution of capabilities is
@@ -164,19 +155,19 @@ control: the boundary is encryption, not "don't serve it."
 - [ ] ~~Trust-on-first-use (TOFU) for producers~~ — **skipped by design**
   alongside petnames (the two form one resolution story); revisit only if a
   concrete UX needs it.
-- [x] Revocation / key expiry: a `rotation.Revocation` (signed by the namespace
-  anchor — the root of trust) removes a compromised key *and every key it
-  transitively delegated* (cascade) from the authorized set, the shrinking
-  counterpart to rotation's widening. Plus mesh distribution: chain + revocations
-  travel together as a `RotationBundle` served as self-verifying Data at the
-  reserved name `/<producer>/_rotation`; an origin publishes it
-  (`ServerConfig.rotation_chain_path` → `ICNServer.publish_rotation_bundle`) and
-  a client fetches + validates + installs it offline
-  (`ICNClient.fetch_rotation_bundle`, anchoring the bundle to the requested
-  producer so a relay can't graft a foreign chain). The bundle wire format is a
-  backward-compatible superset of the bare chain.
+- [ ] ~~Key rotation + revocation~~ — **removed by design.** Rotation was once
+  implemented (a signed anchor→key delegation chain, with anchor-signed
+  revocation cascading down it, distributed over the mesh as a self-verifying
+  bundle) but removed: it reintroduced a delegation-chain trust layer that fought
+  the self-certifying "name *is* the key" model. Its only real benefit was
+  *planned key hygiene* (cold anchor / rotated hot key) — it cannot recover from
+  an anchor-key compromise, because the anchor is the root. Revocation was not
+  separable: in this model the only thing to revoke is the anchor, and revoking
+  it destroys rather than recovers the namespace. So both were dropped. A
+  producer key is single-generation; if it is lost or compromised, recovery means
+  publishing under a new name (a new key) and re-establishing trust out of band.
 
-**Deliverable:** Signed manifests + data, producer auth, key rotation + revocation, per-prefix access control (encrypted content + capability tokens). (Human-readable name resolution skipped by design — see §3.4.) **Phase 3 complete.**
+**Deliverable:** Signed manifests + data, producer auth, per-prefix access control (encrypted content + capability tokens). (Human-readable name resolution and key rotation/revocation removed by design — see §3.4.) **Phase 3 complete.**
 
 ---
 
@@ -266,7 +257,7 @@ control: the boundary is encryption, not "don't serve it."
 |-----------|--------|------------------|
 | **M1: Reliable Client** | Week 4 | 1000 fetches, 0 failures, <100ms p99 latency |
 | **M2: Router Mesh** | Week 8 | 5-hop fetch, cache hit >80%, router failover <5s |
-| **M3: Signed Content** | Week 12 | Tampered content rejected, key rotation works |
+| **M3: Signed Content** | Week 12 | Tampered content rejected, producer signatures verify |
 | **M4: Protocol v1.0** | Week 16 | SDKs pass interop suite, docs complete |
 | **M5: Ecosystem** | Week 24 | 3+ apps using ICN, production deployments |
 

@@ -9,7 +9,7 @@ from pathlib import Path
 
 import RNS
 
-from . import access, rotation
+from . import access
 from .config import ClientConfig
 from .face import LinkFace
 from .forwarder import Forwarder
@@ -38,11 +38,6 @@ class ICNClient:
         # name → highest authenticated (signed_at, sequence) accepted so far,
         # used for rollback detection when config.reject_rollback is set.
         self._seen_signed_key: dict[bytes, tuple[int, int]] = {}
-        # producer addr → its key-rotation chain (rns_icn.rotation), loaded from
-        # config.rotation_chains at start(); empty means "no rotation known".
-        self._rotation_store: dict[bytes, list[rotation.KeyRotation]] = {}
-        # producer addr → its key revocations (paired with the chain above).
-        self._revocation_store: dict[bytes, list[rotation.Revocation]] = {}
         # producer addr → capabilities (rns_icn.access) granting this client read
         # access to restricted prefixes, loaded from config.capabilities.
         self._capability_store: dict[bytes, list[access.Capability]] = {}
@@ -86,32 +81,9 @@ class ICNClient:
         )
         await self._link_pool.start()
 
-        self._load_rotation_chains()
         self._load_capabilities()
 
         return self
-
-    def _load_rotation_chains(self) -> None:
-        """Load and validate configured rotation bundles, keyed by producer.
-
-        Each file holds one producer's rotation chain plus any revocations (a
-        legacy chain-only file loads as a bundle with no revocations). The
-        anchor (the first link's signer key) determines the producer address it
-        applies to. A malformed or unverifiable bundle is skipped with a warning
-        rather than failing startup.
-        """
-        for path in self.config.rotation_chains:
-            try:
-                bundle = rotation.load_rotation_bundle(path)
-                if not bundle.certs:
-                    continue
-                producer = rotation.addr_of_public_key(bundle.certs[0].prev_public_key)
-                # Validate up front so a bad bundle never reaches verification.
-                bundle.verify(producer)
-                self._rotation_store[producer] = bundle.certs
-                self._revocation_store[producer] = bundle.revocations
-            except Exception as e:
-                RNS.log(f"ICN: skipping invalid rotation bundle {path}: {e}", RNS.LOG_WARNING)
 
     def _load_capabilities(self) -> None:
         """Load configured capability files, keyed by producer address.
@@ -140,14 +112,11 @@ class ICNClient:
         peer_hash: bytes,
         timeout: float | None = None,
         max_retries: int | None = None,
-        apply_policy: bool = True,
     ) -> Data | None:
         """Express Interest to peer, wait for Data with retry/backoff.
 
-        ``apply_policy`` runs the signature and rollback checks (the default).
-        It is set False only for fetching a producer's self-verifying rotation
-        bundle, which is authenticated by its own contents rather than a
-        producer signature (see :meth:`fetch_rotation_bundle`).
+        Verified Data is returned only after its signature and rollback checks
+        pass; encrypted content is decrypted in place when a capability is held.
         """
         if self._link_pool is None or self._forwarder is None:
             raise RuntimeError("Client not started. Call start() or use as context manager.")
@@ -178,16 +147,15 @@ class ICNClient:
                 )
 
                 if result and result.verify_content_hash():
-                    if apply_policy:
-                        sig_ok, sig_err = self._check_signature(result)
-                        if not sig_ok:
-                            last_error = sig_err
-                            continue
-                        rb_ok, rb_err = self._check_rollback(result)
-                        if not rb_ok:
-                            last_error = rb_err
-                            continue
-                        result = self._maybe_decrypt(result)
+                    sig_ok, sig_err = self._check_signature(result)
+                    if not sig_ok:
+                        last_error = sig_err
+                        continue
+                    rb_ok, rb_err = self._check_rollback(result)
+                    if not rb_ok:
+                        last_error = rb_err
+                        continue
+                    result = self._maybe_decrypt(result)
                     # Record successful fetch latency
                     fetch_latency = time.time() - fetch_start
                     metrics.record_fetch(fetch_latency, success=True)
@@ -221,28 +189,8 @@ class ICNClient:
         producer address (``name.rns_addr``). A present-but-invalid signature
         is always rejected. A missing signature, or one whose producer key we
         can't recall, is rejected only when ``require_signature`` is set.
-
-        When a key-rotation chain is known for the producer, the Data is
-        accepted if it verifies against any key the chain authorizes (anchor or
-        a delegated key); the chain is self-certifying, so no recall is needed.
         """
         if data.signature is not None:
-            # If we hold a rotation chain for this producer, the set of valid
-            # signing keys is the chain's authorized keys (self-certifying).
-            certs = self._rotation_store.get(data.name.rns_addr)
-            if certs:
-                revocations = self._revocation_store.get(data.name.rns_addr)
-                try:
-                    validators = rotation.authorized_validators(
-                        data.name.rns_addr, certs, revocations
-                    )
-                except rotation.RotationError as e:
-                    return False, ValueError(f"invalid rotation chain: {e}")
-                if any(data.verify_signature(v) for v in validators):
-                    return True, None
-                return False, ValueError(
-                    "Data signature not authorized by producer's rotation chain"
-                )
             # The producer address in a name is the producer's *identity* hash
             # (not a destination hash), so recall accordingly.
             identity = RNS.Identity.recall(
@@ -289,20 +237,12 @@ class ICNClient:
         return True, None
 
     def _producer_validators(self, producer_addr: bytes):
-        """Validators authorized to sign for a producer, or None if unknown.
+        """Validator authorized to sign for a producer, or None if unknown.
 
-        Prefers the producer's rotation chain (self-certifying, revocation-aware);
-        otherwise recalls the producer identity from the mesh. Returns None when
-        neither is available (offline, no chain).
+        The producer address is the identity hash of the (self-certifying) name,
+        so the authorized key is recalled directly from the mesh. Returns None
+        when the identity is not available (offline / never announced).
         """
-        certs = self._rotation_store.get(producer_addr)
-        if certs:
-            try:
-                return rotation.authorized_validators(
-                    producer_addr, certs, self._revocation_store.get(producer_addr)
-                )
-            except rotation.RotationError:
-                return None
         identity = RNS.Identity.recall(producer_addr, from_identity_hash=True)
         if identity is not None:
             return [identity.validate]
@@ -347,36 +287,6 @@ class ICNClient:
             out.metadata.signed_at = data.metadata.signed_at
             return out
         return data
-
-    async def fetch_rotation_bundle(
-        self,
-        producer_addr: bytes,
-        peer_hash: bytes,
-        timeout: float | None = None,
-    ) -> list[bytes] | None:
-        """Fetch a producer's rotation bundle over the mesh and load it.
-
-        Retrieves the self-verifying bundle published at
-        ``/<producer>/_rotation``, validates that it anchors to
-        ``producer_addr`` (so a relay cannot graft a foreign chain onto the
-        name), and installs its chain + revocations into the local stores so
-        subsequent :meth:`fetch` calls verify rotated/revoked keys offline.
-
-        The bundle carries no producer signature — it authenticates itself — so
-        the fetch deliberately skips the signature/rollback policy. Returns the
-        authorized public keys, or ``None`` if nothing was retrieved. Raises
-        :class:`rotation.RotationError` if the bundle is malformed or does not
-        anchor to ``producer_addr``.
-        """
-        name = rotation.rotation_name(producer_addr)
-        data = await self.fetch(name, peer_hash, timeout, apply_policy=False)
-        if data is None:
-            return None
-        bundle = rotation.RotationBundle.from_bytes(data.content)
-        keys = bundle.verify(producer_addr)  # raises RotationError if invalid
-        self._rotation_store[producer_addr] = bundle.certs
-        self._revocation_store[producer_addr] = bundle.revocations
-        return keys
 
     async def fetch_manifest(
         self,

@@ -20,7 +20,8 @@ The model mirrors NDN Name-based Access Control, adapted to RNS identities:
   a :class:`Capability`: a signed grant binding (consumer, prefix, validity)
   that carries the CEK *wrapped to the consumer's RNS identity* (ECIES, so only
   that consumer can unwrap it). The consumer verifies the producer's signature
-  (self-certifying, rotation-aware), unwraps the CEK, and decrypts.
+  (self-certifying — the producer key is recalled from the name), unwraps the
+  CEK, and decrypts.
 
 A capability is safe to distribute over any channel — the wrapped CEK is opaque
 to everyone but its named consumer — but distribution itself (files vs. mesh) is
@@ -121,7 +122,7 @@ class Capability:
     Binds ``consumer`` (identity hash) to ``prefix`` for a validity window and
     carries ``wrapped_cek`` — the prefix CEK encrypted to the consumer. Signed by
     the producer; the consumer verifies the signature against the producer's
-    authorized key (recalled or via its rotation chain), then unwraps and
+    authorized key (recalled from the self-certifying name), then unwraps and
     decrypts. ``expires_at`` of 0 means no expiry.
     """
 
@@ -198,8 +199,7 @@ class Capability:
 
         Derives the prefix CEK from ``producer_identity`` (the namespace owner),
         wraps it to ``consumer``, and signs with ``signer`` (the producer's
-        signing key, which may be a rotation-delegated key). ``producer_addr``
-        defaults to ``prefix.rns_addr``.
+        signing key). ``producer_addr`` defaults to ``prefix.rns_addr``.
         """
         addr = producer_addr if producer_addr is not None else prefix.rns_addr
         cek = derive_cek(producer_identity, prefix)

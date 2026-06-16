@@ -58,7 +58,7 @@ def _parse_version(data: bytes, pos: int, err: type[Exception]) -> int:
 
 # Domain-separation tags prepended to signed hashes. Each producer-signed object
 # commits to a distinct tag so a signature over one can never be replayed as
-# another, matching the rotation/revocation/capability constructions. These are
+# another, matching the capability construction in rns_icn.access. These are
 # part of the signed bytes (not the wire framing), so they are independent of the
 # per-packet version byte above; a future signed-bytes change is a version bump.
 _DATA_DOMAIN = b"icn-data\x01"

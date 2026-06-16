@@ -26,8 +26,6 @@ is still being shaped in place.
 - **Ed25519 producer signatures** over an authenticated sequence/timestamp
   envelope, with consumer rollback protection and per-chunk signatures for
   streamed content.
-- **Key rotation + anchor-signed revocation** via signed delegation chains,
-  distributed over the mesh as self-verifying rotation bundles.
 - **Per-prefix access control**: producer-derived content encryption keys +
   ECIES-wrapped capability tokens (fails closed).
 - **Domain-separated signatures**: the Data envelope and Invalidate hash commit
@@ -55,5 +53,16 @@ is still being shaped in place.
 - `PROTOCOL.md` normative specification, `LICENSE` (MIT), `SECURITY.md`.
 - Expanded ruff rule set (bugbear, async, comprehensions, pytest, pyupgrade,
   ruff-specific, simplify); CI matrix across Python 3.10–3.13.
-</content>
-</invoke>
+
+### Design decisions
+
+- **Key rotation and revocation removed.** An earlier iteration implemented a
+  signed anchor→key delegation chain with anchor-signed revocation, distributed
+  over the mesh as a self-verifying bundle. It was removed because it
+  reintroduced a delegation-chain trust layer that fought the self-certifying
+  "name *is* the key" model: its only real benefit was planned key hygiene (it
+  cannot recover from an anchor-key compromise, since the anchor is the root),
+  and revocation was not separable from it. A producer key is now
+  single-generation; recovery from loss/compromise means republishing under a new
+  name out of band. (Also removes `ServerConfig.signing_identity_path`,
+  `rotation_chains`, and `rotation_chain_path`.)

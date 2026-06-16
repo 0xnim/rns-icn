@@ -241,11 +241,9 @@ def test_content_store_unsigned_stays_unsigned(tmp_path):
 # ── Client policy ──
 
 
-def _client(require_signature: bool, rotation_store=None):
+def _client(require_signature: bool):
     client = object.__new__(_ClientForPolicy)
     client.config = ClientConfig(require_signature=require_signature)
-    client._rotation_store = rotation_store or {}
-    client._revocation_store = {}
     return client
 
 
@@ -263,8 +261,6 @@ def _rollback_client(reject_rollback: bool):
     client = object.__new__(_ClientForPolicy)
     client.config = ClientConfig(reject_rollback=reject_rollback)
     client._seen_signed_key = {}
-    client._rotation_store = {}
-    client._revocation_store = {}
     return client
 
 
@@ -389,87 +385,6 @@ def test_rollback_is_per_name(identity):
     assert client._check_rollback(b_old)[0]
 
 
-# ── Key rotation (Phase 3.1: _check_signature consults the rotation chain) ──
-
-from rns_icn.rotation import KeyRotation  # noqa: E402
-
-
-def _rotation_client(anchor, *gens):
-    """A policy client holding a valid rotation chain anchor → gens..."""
-    certs, prev = [], anchor
-    for i, nxt in enumerate(gens, start=1):
-        certs.append(KeyRotation.create(anchor.hash, i, prev, nxt))
-        prev = nxt
-    client = object.__new__(_ClientForPolicy)
-    client.config = ClientConfig(require_signature=True)
-    client._rotation_store = {anchor.hash: certs}
-    client._revocation_store = {}
-    return client
-
-
-def test_rotated_key_signature_accepted():
-    anchor, new = RNS.Identity(), RNS.Identity()
-    client = _rotation_client(anchor, new)
-    data = Data.new(name=Name(anchor.hash, [b"doc"]), content=b"x").sign(new.sign)
-    ok, err = client._check_signature(data)
-    assert ok and err is None
-
-
-def test_anchor_signature_still_accepted_with_chain():
-    anchor, new = RNS.Identity(), RNS.Identity()
-    client = _rotation_client(anchor, new)
-    data = Data.new(name=Name(anchor.hash, [b"doc"]), content=b"x").sign(anchor.sign)
-    ok, err = client._check_signature(data)
-    assert ok and err is None
-
-
-def test_unauthorized_key_rejected_under_chain():
-    anchor, new, attacker = RNS.Identity(), RNS.Identity(), RNS.Identity()
-    client = _rotation_client(anchor, new)
-    data = Data.new(name=Name(anchor.hash, [b"doc"]), content=b"x").sign(attacker.sign)
-    ok, err = client._check_signature(data)
-    assert not ok and err is not None
-
-
-def test_chain_consulted_without_recall(monkeypatch):
-    """A known chain is self-certifying — verification must not require recall."""
-    monkeypatch.setattr(
-        RNS.Identity, "recall",
-        staticmethod(lambda *a, **k: (_ for _ in ()).throw(
-            AssertionError("recall should not be called when a chain is present")
-        )),
-    )
-    anchor, new = RNS.Identity(), RNS.Identity()
-    client = _rotation_client(anchor, new)
-    data = Data.new(name=Name(anchor.hash, [b"doc"]), content=b"x").sign(new.sign)
-    assert client._check_signature(data)[0]
-
-
-# ── Key revocation (Phase 3.4: _check_signature honours revocations) ──
-
-from rns_icn.rotation import Revocation  # noqa: E402
-
-
-def test_revoked_key_signature_rejected():
-    """A revoked delegated key no longer verifies even though it's in the chain."""
-    anchor, compromised = RNS.Identity(), RNS.Identity()
-    client = _rotation_client(anchor, compromised)
-    rev = Revocation.create(anchor.hash, compromised.get_public_key(), anchor)
-    client._revocation_store = {anchor.hash: [rev]}
-    data = Data.new(name=Name(anchor.hash, [b"doc"]), content=b"x").sign(compromised.sign)
-    ok, err = client._check_signature(data)
-    assert not ok and err is not None
-
-
-def test_anchor_still_valid_after_revoking_delegate():
-    anchor, compromised = RNS.Identity(), RNS.Identity()
-    client = _rotation_client(anchor, compromised)
-    rev = Revocation.create(anchor.hash, compromised.get_public_key(), anchor)
-    client._revocation_store = {anchor.hash: [rev]}
-    data = Data.new(name=Name(anchor.hash, [b"doc"]), content=b"x").sign(anchor.sign)
-    assert client._check_signature(data)[0]
-
-
 # ── Access control (Phase 3.3: _maybe_decrypt honours capabilities) ──
 
 from rns_icn.access import (  # noqa: E402
@@ -479,12 +394,10 @@ from rns_icn.access import (  # noqa: E402
 )
 
 
-def _decrypt_client(identity, capability=None, rotation_store=None):
+def _decrypt_client(identity, capability=None):
     client = object.__new__(_ClientForPolicy)
     client.config = ClientConfig()
     client._identity = identity
-    client._rotation_store = rotation_store or {}
-    client._revocation_store = {}
     store = {}
     if capability is not None:
         store.setdefault(capability.producer, []).append(capability)

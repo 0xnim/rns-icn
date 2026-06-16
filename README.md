@@ -15,20 +15,16 @@ RNS encrypted Links.
 > signing has landed: origins sign Data with their Ed25519 RNS identity and
 > clients verify it (cache-poisoning defence), with the sequence number and a
 > signing timestamp now bound into the signed envelope so clients can reject a
-> relay replaying a stale-but-validly-signed version (rollback). Producers can
-> rotate their signing key via a self-certifying chain of signed delegation
-> certificates (`rns_icn/rotation.py`), and revoke a compromised key (the anchor
-> signs a revocation that cascades to every key it delegated). Chain +
-> revocations travel as a self-verifying bundle served at `/<producer>/_rotation`,
-> so a client can fetch a producer's authorized keys over the mesh and verify
-> them offline. Access control (Phase 3.3) has landed: a producer can restrict a
+> relay replaying a stale-but-validly-signed version (rollback). Access control (Phase 3.3) has landed: a producer can restrict a
 > name prefix to specific consumers, content under it is encrypted with a key
 > derived from the producer's identity (caches still store and relay opaque
 > ciphertext), and authorized consumers read it via a producer-signed capability
 > that carries the content key wrapped to their RNS identity. Phase 3 is
-> complete; human-readable name resolution (petnames/TOFU) is skipped by design —
-> a global human-meaningful namespace doesn't fit an offline-first mesh, and a
-> local petname map belongs to the application layer with no protocol change.
+> complete; human-readable name resolution (petnames/TOFU) and key
+> rotation/revocation are skipped by design — a global human-meaningful namespace
+> doesn't fit an offline-first mesh, and a delegation-chain key layer fights the
+> self-certifying "name *is* the key" model. A producer key is single-generation:
+> if it is lost or compromised, recovery means publishing under a new name.
 
 ## How it works
 

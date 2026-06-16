@@ -25,22 +25,21 @@ publishing details.
 In scope (the security surface this project is responsible for):
 
 - **Wire parsers** — malformed/adversarial input handling for every packet and
-  signed object (see [PROTOCOL.md](PROTOCOL.md) §1, §20).
+  signed object (see [PROTOCOL.md](PROTOCOL.md) §1, §18).
 - **Producer signatures** — the Data signature envelope, Invalidate, and the
-  domain-separated rotation/revocation/capability constructions ([PROTOCOL.md](PROTOCOL.md) §10).
-- **Key lifecycle** — rotation chain verification and revocation cascade
-  ([PROTOCOL.md](PROTOCOL.md) §11–§12).
+  domain-separated capability construction ([PROTOCOL.md](PROTOCOL.md) §10).
 - **Access control** — content-key derivation, encryption, capability tokens,
-  and the fail-closed decryption path ([PROTOCOL.md](PROTOCOL.md) §13).
+  and the fail-closed decryption path ([PROTOCOL.md](PROTOCOL.md) §11).
 - **Forwarding** — cache-poisoning surfaces, replay/rollback, hop-limit and loop
-  handling ([PROTOCOL.md](PROTOCOL.md) §14–§15).
+  handling ([PROTOCOL.md](PROTOCOL.md) §12–§13).
 
-Out of scope / known non-goals (documented in [PROTOCOL.md](PROTOCOL.md) §20):
+Out of scope / known non-goals (documented in [PROTOCOL.md](PROTOCOL.md) §18):
 
 - consumer anonymity and traffic-analysis resistance (an on-path observer sees
   requested names, modulo RNS path encryption);
-- compromise of a namespace's **anchor** key (inherent to self-certifying names —
-  the anchor *is* the namespace's root of trust);
+- loss or compromise of a producer's key (inherent to self-certifying names — the
+  key *is* the namespace; there is no rotation/recovery, so the remedy is to
+  republish under a new name);
 - the security of Reticulum itself (report RNS issues upstream).
 
 ## The trust model in one paragraph
@@ -50,7 +49,7 @@ public key. Trust in a namespace is trust in that key. Forwarders/caches are
 untrusted for integrity and confidentiality — they relay opaque, signed (and
 optionally encrypted) Data they cannot forge or read. Consumer-side signature
 verification is therefore **mandatory** for any integrity guarantee. See
-[PROTOCOL.md](PROTOCOL.md) §20 for the full model.
+[PROTOCOL.md](PROTOCOL.md) §18 for the full model.
 
 ## Supported versions
 

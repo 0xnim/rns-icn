@@ -65,11 +65,6 @@ class ClientConfig:
     # on signed Data; unsigned Data is unaffected. Default False for additive
     # rollout, mirroring require_signature.
     reject_rollback: bool = False
-    # Paths to producer key-rotation chain files (see rns_icn.rotation). Each
-    # file holds the signed delegation chain for one producer; the client loads
-    # them and accepts Data signed by any key the chain authorizes, so a
-    # producer can rotate its signing key without breaking verification.
-    rotation_chains: list[str] = field(default_factory=list)
     # Paths to capability files (rns_icn.access.Capability) granting this client
     # read access to restricted prefixes. Each carries a CEK wrapped to this
     # client's identity; the client verifies the producer's signature, unwraps
@@ -93,18 +88,6 @@ class ServerConfig:
     rns_configdir: str | None = None
     mesh_interfaces: list[str] = field(default_factory=lambda: ["UTN Oregon"])
     role: ServerRole = ServerRole.ORIGIN
-    # Optional separate signing identity for key rotation. The server still
-    # owns its destination/namespace under ``identity_path`` (the anchor), but
-    # signs originated Data with this delegated key — pair it with a rotation
-    # chain delegating from the anchor to this key so clients still verify.
-    # None = sign with the anchor identity (no rotation).
-    signing_identity_path: str | None = None
-    # Optional path to this producer's rotation bundle (chain + revocations,
-    # rns_icn.rotation). When set, the origin publishes it as self-verifying
-    # Data at ``/<producer>/_rotation`` so peers can fetch the producer's
-    # authorized signing keys (and revocations) over the mesh. None = don't
-    # publish a bundle.
-    rotation_chain_path: str | None = None
     # Per-prefix access control (rns_icn.access). Each rule restricts a name
     # prefix to a set of consumer identities; the origin encrypts content under
     # restricted prefixes at publish and issues capabilities to the listed
@@ -181,9 +164,6 @@ def _dict_to_client_config(data: dict[str, Any], base_path: str) -> ClientConfig
         path_request_timeout=data.get("path_request_timeout", 30.0),
         require_signature=data.get("require_signature", False),
         reject_rollback=data.get("reject_rollback", False),
-        rotation_chains=[
-            str((base_dir / p).expanduser()) for p in data.get("rotation_chains", [])
-        ],
         capabilities=[
             str((base_dir / p).expanduser()) for p in data.get("capabilities", [])
         ],
@@ -224,14 +204,6 @@ def _dict_to_server_config(data: dict[str, Any], base_path: str) -> ServerConfig
     if rns_configdir:
         rns_configdir = str(Path(rns_configdir).expanduser())
 
-    signing_identity_path = data.get("signing_identity_path")
-    if signing_identity_path:
-        signing_identity_path = str((base_dir / signing_identity_path).expanduser())
-
-    rotation_chain_path = data.get("rotation_chain_path")
-    if rotation_chain_path:
-        rotation_chain_path = str((base_dir / rotation_chain_path).expanduser())
-
     access_rules = [
         AccessRuleConfig(
             prefix=list(r["prefix"]),
@@ -247,8 +219,6 @@ def _dict_to_server_config(data: dict[str, Any], base_path: str) -> ServerConfig
         rns_configdir=rns_configdir,
         mesh_interfaces=data.get("mesh_interfaces", ["UTN Oregon"]),
         role=role,
-        signing_identity_path=signing_identity_path,
-        rotation_chain_path=rotation_chain_path,
         access_rules=access_rules,
         announce_interval=data.get("announce_interval", 30.0),
         reannounce_on_link=data.get("reannounce_on_link", True),
