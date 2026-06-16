@@ -1,6 +1,7 @@
 # rns-icn Protocol Specification
 
-**Version:** 2 (as implemented in rns-icn 0.2.0)
+**Wire generation:** 1 (as implemented in rns-icn 0.1.0, unpublished — the `0.x`
+wire is unstable; see [§19](#19-versioning-and-forward-compatibility))
 **Status:** Reference specification. This document is normative and is written to
 match the reference implementation in this repository. Where this document and
 the code disagree, that is a bug in one of them — please file an issue.
@@ -179,7 +180,12 @@ prefixes, and `can_be_prefix` Interests all use this relation.
 
 ## 6. Packet framing
 
-Every ICN packet begins with a one-byte **type discriminator**:
+Every ICN packet begins with a one-byte **type discriminator** followed by a
+one-byte **protocol version**:
+
+```
+[type:u8][version:u8] …
+```
 
 | Value | Type | Section |
 |-------|------|---------|
@@ -190,15 +196,20 @@ Every ICN packet begins with a one-byte **type discriminator**:
 | `0x05` | Capability Peer | [§9.3](#93-capability-peer-0x05) |
 | `0x06` | Invalidate | [§9.4](#94-invalidate-0x06) |
 
-An unknown type byte **MUST** be rejected. There is no separate length prefix at
-the framing layer: the transport (`Channel`/`Resource`) delivers whole packets.
+The `version` byte is the **wire generation** and is the same for all packet
+types; the current value is `1`. A receiver **MUST** reject a packet whose
+`version` it does not implement — including one read from cache or relayed by a
+peer — rather than attempt to parse it (see
+[§19](#19-versioning-and-forward-compatibility)). An unknown type byte **MUST**
+likewise be rejected. There is no separate length prefix at the framing layer:
+the transport (`Channel`/`Resource`) delivers whole packets.
 
 ---
 
 ## 7. Interest
 
 ```
-[0x01]
+[0x01][version:u8]                         # §6
 [name_len:varint][name:name_len]          # §5
 [nonce:8]
 [lifetime_ms:u32]
@@ -234,7 +245,7 @@ the framing layer: the transport (`Channel`/`Resource`) delivers whole packets.
 ## 8. Data
 
 ```
-[0x02]
+[0x02][version:u8]                          # §6
 [name_len:varint][name:name_len]           # §5
 [content_len:u32][content:content_len]
 [flags:u8]
@@ -299,7 +310,7 @@ stream prefix. After it, the producer pushes matching Data without per-segment
 Interests.
 
 ```
-[0x03]
+[0x03][version:u8]                          # §6
 [name_len:varint][name:name_len]
 [flags:u8]      # bit 0: start_from_now (do not push already-existing content)
 ```
@@ -314,8 +325,7 @@ them on reconnect.
 Handshake establishing a propagation peering between two servers.
 
 ```
-[0x04]
-[version:u8]       # currently 1
+[0x04][version:u8]                          # §6, currently 1
 [rns_addr:16]
 [flags:u8]         # bit 0: wants_sync (peer wants to sync existing content now)
 ```
@@ -326,8 +336,7 @@ Exchanged immediately after link establishment so each side learns the other's
 role and supported features.
 
 ```
-[0x05]
-[version:u8]       # protocol version, currently 1
+[0x05][version:u8]                          # §6, currently 1
 [role:u8]          # 0 = ORIGIN, 1 = CACHE, 2 = PROPAGATION
 [features:u32]     # feature bitmask
 ```
@@ -342,8 +351,10 @@ role and supported features.
 | `0x00000008` | Content manifest |
 | `0x00000010` | Chunked content |
 
-This is the protocol's capability-negotiation surface: it is the only place a
-peer-wide `version` is currently exchanged (see
+This is the protocol's capability-negotiation surface. The `version` byte here
+carries the same wire generation as every other packet ([§6](#6-packet-framing));
+the `features` bitmask is the orthogonal capability-advertisement channel, letting
+peers light up optional behaviour without a version bump (see
 [§19](#19-versioning-and-forward-compatibility)).
 
 ### 9.4 Invalidate (`0x06`)
@@ -351,7 +362,7 @@ peer-wide `version` is currently exchanged (see
 A producer-signed cache-purge for a name or prefix.
 
 ```
-[0x06]
+[0x06][version:u8]                          # §6
 [name_len:varint][name:name_len]
 [epoch:u64]
 [flags:u8]         # bit 0: is_prefix, bit 1: has_signature
@@ -414,10 +425,10 @@ Design notes (normative for interoperability):
   ([§15.2](#152-rollback-protection)) and trust the `encrypted` flag
   ([§13](#13-access-control)).
 * `H_data` is prefixed with the domain tag `b"icn-data\x01"` so a Data signature
-  can never be replayed as another signed object (and vice versa). This tag was
-  added in protocol v2; v1 (rns-icn 0.1.x) signatures omitted it and therefore
-  **do not verify under v2**. Producers and consumers must run matching protocol
-  versions.
+  can never be replayed as another signed object (and vice versa). The tag is part
+  of the signed bytes, not the wire framing; changing it is a signed-bytes
+  generation change governed by the version rule in
+  [§19](#19-versioning-and-forward-compatibility).
 
 A consumer verifies by recomputing `H_data` and checking the signature against
 an authorized producer key ([§10.4](#104-resolving-an-authorized-producer-key)).
@@ -846,9 +857,21 @@ chunks.
 
 ## 19. Versioning and forward compatibility
 
-This protocol evolves primarily by **append-only extension**, not by a per-packet
-version field. Implementers **MUST** observe the following rules.
+Every packet carries an explicit **wire-generation version** ([§6](#6-packet-framing)),
+and the protocol additionally evolves by **append-only extension** within a
+generation. The two mechanisms are complementary: append-only flags cover
+*compatible growth*, while the version byte makes an *incompatible* change fail
+loud instead of silently mis-parsing. Implementers **MUST** observe the following
+rules.
 
+* **Wire generation.** The `version` byte ([§6](#6-packet-framing)) identifies a
+  parse/signed-bytes generation that is the same across all packet types. A
+  receiver **MUST** reject any packet — Interest, Data, or control, whether
+  received live, relayed, or read from its own cache — whose `version` it does not
+  implement, and **SHOULD** surface this distinctly from a corrupt/malformed
+  packet (the reference build raises `UnsupportedVersionError`). A breaking change
+  to packet framing or to a signed-bytes construction is made by incrementing this
+  value, never by redefining existing fields within a generation.
 * **Packet type bytes** ([§6](#6-packet-framing)) are a stable registry. New
   packet types take new discriminator values; existing values never change
   meaning. Unknown types are rejected/dropped.
@@ -868,17 +891,31 @@ version field. Implementers **MUST** observe the following rules.
   present on the Data it holds.
 * **Bundle/structured blobs** ([§11.3](#113-rotation-bundle)) use optional
   trailing sections so older and newer encoders/decoders interoperate.
-* **Negotiated capabilities** — peer role and feature support are exchanged via
-  Capability Peer ([§9.3](#93-capability-peer-0x05)); the `version` byte there is
-  the current peer-version handshake.
+* **Negotiated capabilities** — peer role and optional-feature support are
+  exchanged via the Capability Peer `features` bitmask
+  ([§9.3](#93-capability-peer-0x05)). Optional behaviour is gated by a feature
+  bit, not by a version bump; the `version` byte on that packet is the same wire
+  generation as everywhere else.
 
-**Known limitation.** Interest and Data have **no explicit per-packet version
-field** (only Propagation Peer and Capability Peer carry a `version`). The
-append-only scheme above supports backward-compatible *additions* but not clean
-backward-incompatible changes to Interest/Data framing. A future protocol
-version that needs a breaking change SHOULD introduce a version negotiation
-(e.g. a new Capability Peer `version` gating a new packet-type range) rather than
-redefining existing fields.
+**Compatibility policy.** This decides which mechanism a change uses:
+
+* A change that only **adds** an optional field or behaviour uses an append-only
+  flag bit, a new signed-envelope tag, a new trailing bundle section, or a new
+  feature bit. It does **not** change the version, and older peers ignore what
+  they do not understand.
+* A change that alters how **existing** bytes are parsed or signed — anything an
+  older peer would mis-read rather than skip — is a **breaking** change and
+  **MUST** increment the wire `version` ([§6](#6-packet-framing)). Receivers
+  reject unknown generations, so the two sides fail cleanly rather than
+  exchanging mutually unintelligible packets.
+* New packet types take a new type byte ([§6](#6-packet-framing)) within the
+  current generation; they are not a version bump.
+
+> **0.x is unstable.** This specification tracks an unpublished `0.x`
+> implementation. Until `1.0`, the wire generation (currently `1`) and the
+> formats above may change between commits without the staged migration the
+> policy implies. The guarantees in this section are what callers can rely on
+> **from `1.0` onward**.
 
 ---
 

@@ -344,3 +344,61 @@ class TestEncryptedFlag:
         # Re-deriving with encrypted explicitly False must be identical.
         data.metadata.encrypted = False
         assert data.signed_hash() == h
+
+
+class TestProtocolVersion:
+    """Every packet is framed [type:1][version:1]; unknown versions are rejected."""
+
+    def test_version_byte_present_on_all_packet_types(self):
+        from rns_icn.packet import (
+            PROTOCOL_VERSION,
+            APSubscribe,
+            CapPeer,
+            Invalidate,
+            PropPeer,
+        )
+        name = Name(rns_addr(0x01), [b"item"])
+        packets = [
+            Interest(name=name),
+            Data.new(name=name, content=b"x"),
+            APSubscribe(name=name),
+            Invalidate(name=name, epoch=1),
+            PropPeer(rns_addr=rns_addr(0x02)),
+            CapPeer(role=1, features=0x3),
+        ]
+        for p in packets:
+            raw = p.to_bytes()
+            assert raw[1] == PROTOCOL_VERSION, type(p).__name__
+
+    def test_unknown_version_rejected(self):
+        from rns_icn.packet import (
+            APSubscribe,
+            CapPeer,
+            Invalidate,
+            PropPeer,
+            UnsupportedVersionError,
+        )
+        name = Name(rns_addr(0x01), [b"item"])
+        builders = [
+            Interest(name=name),
+            Data.new(name=name, content=b"x"),
+            APSubscribe(name=name),
+            Invalidate(name=name, epoch=1),
+            PropPeer(rns_addr=rns_addr(0x02)),
+            CapPeer(role=1),
+        ]
+        for p in builders:
+            raw = bytearray(p.to_bytes())
+            raw[1] = 0xFF  # a generation this build does not speak
+            with pytest.raises(UnsupportedVersionError):
+                parse_packet(bytes(raw))
+
+    def test_version_skew_distinguishable_from_corruption(self):
+        # UnsupportedVersionError is its own type, not the generic per-packet
+        # parse error, so a caller can tell skew apart from a malformed packet.
+        from rns_icn.packet import UnsupportedVersionError
+        name = Name(rns_addr(0x01), [b"item"])
+        raw = bytearray(Data.new(name=name, content=b"x").to_bytes())
+        raw[1] = 0x02
+        with pytest.raises(UnsupportedVersionError):
+            Data.from_bytes(bytes(raw))

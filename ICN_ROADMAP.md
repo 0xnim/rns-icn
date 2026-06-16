@@ -8,7 +8,7 @@
 
 ## Current State
 
-Phases 1 and 2 are complete; parts of Phase 4 (capability negotiation, pub/sub, chunked transfer) landed early. Phase 3.1 (signed manifests, authenticated sequence/timestamp, key rotation), 3.2 (per-packet/per-chunk producer signatures), 3.3 (access control: per-prefix ACLs, encrypted content, capability tokens), and the key-management half of 3.4 (revocation + mesh distribution of rotation bundles) are implemented. The rest of 3.4 (petnames, TOFU) is **skipped by design** — a global human-readable namespace doesn't fit an offline-first mesh, and a local petname map belongs to the application layer and needs no protocol change (see §3.4). Phase 3 is otherwise complete.
+Phases 1 and 2 are complete; Phase 4.1 (protocol versioning) is done and other parts of Phase 4 (pub/sub, chunked transfer) landed early. Phase 3.1 (signed manifests, authenticated sequence/timestamp, key rotation), 3.2 (per-packet/per-chunk producer signatures), 3.3 (access control: per-prefix ACLs, encrypted content, capability tokens), and the key-management half of 3.4 (revocation + mesh distribution of rotation bundles) are implemented. The rest of 3.4 (petnames, TOFU) is **skipped by design** — a global human-readable namespace doesn't fit an offline-first mesh, and a local petname map belongs to the application layer and needs no protocol change (see §3.4). Phase 3 is otherwise complete.
 
 | Component | Status | Gaps |
 |-----------|--------|------|
@@ -17,7 +17,7 @@ Phases 1 and 2 are complete; parts of Phase 4 (capability negotiation, pub/sub, 
 | Content store | SQLite + TTL + LRU + crash recovery | — |
 | Forwarding | Multi-hop (FIB/PIT/CS); `icn-router` binary; **cache coherency** (freshness period, stale-while-revalidate, signed invalidation) | no multi-path |
 | Naming | /hash/label, content-hash verified, **Ed25519 producer signatures** (sequence + timestamp authenticated; client rollback protection; **key rotation + anchor-signed revocation** via signed delegation chains, distributed over the mesh as self-verifying bundles); **per-prefix access control** (encrypted content + capability tokens) | petname/TOFU resolution skipped by design |
-| API | Versioned via capability exchange | per-packet version not in Interest/Data |
+| API | Per-packet wire version (`[type][version]`) + capability exchange; unknown generation rejected cleanly | — |
 | Operations | TOML config, JSON logs, health + metrics | — |
 
 ---
@@ -182,10 +182,10 @@ control: the boundary is encryption, not "don't serve it."
 
 ## Phase 4: Protocol Maturity (Weeks 13-16) — "LXMF Parity"
 
-### 4.1 Protocol Versioning
-- [ ] Protocol version in Interest/Data headers (Interest/Data carry a type byte but no version field; only `Subscribe`/`CapPeer` are versioned)
-- [x] Capability negotiation (client ↔ router ↔ server) (`CapPeer` exchange on each link; `version` + 4-byte feature bitmask)
-- [ ] Backward compatibility policy
+### 4.1 Protocol Versioning ✅
+- [x] Protocol version in Interest/Data headers (every packet is framed uniformly as `[type:1][version:1]…`; an unknown generation is rejected with `UnsupportedVersionError` rather than silently mis-parsed — applies to cached/relayed packets too; `packet.PROTOCOL_VERSION`)
+- [x] Capability negotiation (client ↔ router ↔ server) (`CapPeer` exchange on each link; wire `version` byte + 4-byte feature bitmask for optional behaviour)
+- [x] Backward compatibility policy (`PROTOCOL.md` §19: append-only flags/tags/feature-bits for compatible growth, version bump for breaking parse/signed-bytes changes; effective from 1.0 — the 0.x wire is unstable)
 
 ### 4.2 Advanced Features
 - [x] **Pub/Sub**: `Subscribe(prefix)` → proactive Data push (`rns_icn/aps.py`, `OfflineQueue` for disconnected subscribers)

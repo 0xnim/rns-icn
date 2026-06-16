@@ -23,11 +23,44 @@ from .name import Name
 # RNS Identity.sign() produces a 64-byte Ed25519 signature.
 SIGNATURE_BYTES = 64
 
-# Domain-separation tags prepended to signed hashes (protocol v2). Each producer-
-# signed object commits to a distinct tag so a signature over one can never be
-# replayed as another, matching the rotation/revocation/capability constructions.
-# NOTE: adding these changed the signed bytes — v1 signatures do not verify under
-# v2 and vice versa (see PROTOCOL.md §10 and CHANGELOG).
+# On-wire protocol generation. Every ICN packet is framed as [type:1][version:1]
+# so a receiver can detect a peer (or a cached/relayed packet) speaking a
+# generation it does not understand and reject it cleanly, instead of silently
+# mis-parsing. The 0.x wire is unstable and may change this without ceremony;
+# from 1.0 onward a bump signals a breaking parse/signed-bytes change governed by
+# the compatibility policy in PROTOCOL.md.
+PROTOCOL_VERSION = 1
+SUPPORTED_VERSIONS = frozenset({1})
+
+
+class UnsupportedVersionError(Exception):
+    """A packet declared a protocol version this build cannot parse."""
+    ...
+
+
+def _parse_version(data: bytes, pos: int, err: type[Exception]) -> int:
+    """Read and validate the per-packet version byte at ``pos``.
+
+    Raises ``err`` (the packet type's own error) if the buffer is too short, and
+    ``UnsupportedVersionError`` — distinctly catchable, so callers can tell
+    version skew from corruption — if the version is one we don't speak.
+    """
+    if pos >= len(data):
+        raise err("buffer too short for protocol version")
+    version = data[pos]
+    if version not in SUPPORTED_VERSIONS:
+        raise UnsupportedVersionError(
+            f"unsupported protocol version {version} "
+            f"(this build speaks {sorted(SUPPORTED_VERSIONS)})"
+        )
+    return version
+
+
+# Domain-separation tags prepended to signed hashes. Each producer-signed object
+# commits to a distinct tag so a signature over one can never be replayed as
+# another, matching the rotation/revocation/capability constructions. These are
+# part of the signed bytes (not the wire framing), so they are independent of the
+# per-packet version byte above; a future signed-bytes change is a version bump.
 _DATA_DOMAIN = b"icn-data\x01"
 _INVALIDATE_DOMAIN = b"icn-invalidate\x01"
 
@@ -109,7 +142,7 @@ class InterestSelector:
 class Interest:
     """An Interest packet — 'I want this named data.'
 
-    Wire: [type:1=0x01][name_len:varint][name...][nonce:8][lifetime_ms:4][flags:1]
+    Wire: [type:1=0x01][version:1][name_len:varint][name...][nonce:8][lifetime_ms:4][flags:1]
           [selector:8 if flags bit 2][hop_limit:1 if flags bit 3]
       flags bit 0: can_be_prefix
       flags bit 1: must_be_fresh
@@ -169,6 +202,7 @@ class Interest:
         name_bytes = self.name.to_bytes()
         buf = bytearray()
         buf.append(PacketType.INTEREST)
+        buf.append(PROTOCOL_VERSION)
         buf.extend(_write_varint(len(name_bytes)))
         buf.extend(name_bytes)
         buf.extend(self.nonce)
@@ -192,6 +226,8 @@ class Interest:
         pos = 0
         if data[pos] != PacketType.INTEREST:
             raise InterestError(f"expected INTEREST type byte, got {data[pos]:#x}")
+        pos += 1
+        _parse_version(data, pos, InterestError)
         pos += 1
         name_len, consumed = _read_varint(data, pos)
         pos += consumed
@@ -353,7 +389,7 @@ class DataMetadata:
 class Data:
     """A Data packet — 'Here is the content you asked for.'
 
-    Wire: [type:1=0x02][name_len:varint][name...][content_len:4][content...]
+    Wire: [type:1=0x02][version:1][name_len:varint][name...][content_len:4][content...]
           [flags:1][metadata_len:varint if h'01][metadata...][sig:64 if h'02]
       flags bit 0: has_metadata
       flags bit 1: has_signature
@@ -405,8 +441,8 @@ class Data:
         # signature; this is what lets a consumer trust them for rollback
         # detection. Appended after the core fields, each behind a one-byte tag,
         # so a signature made before a given field existed still verifies within
-        # the same protocol version (the leading _DATA_DOMAIN is what makes v1
-        # and v2 signatures mutually invalid — see CHANGELOG).
+        # the same signed-bytes generation (the leading _DATA_DOMAIN binds the
+        # envelope to the "data" object kind — see PROTOCOL.md §10).
         if self.metadata.sequence is not None:
             h.update(b"\x01")
             h.update(struct.pack(">Q", self.metadata.sequence))
@@ -486,6 +522,7 @@ class Data:
 
         buf = bytearray()
         buf.append(PacketType.DATA)
+        buf.append(PROTOCOL_VERSION)
         buf.extend(_write_varint(len(name_bytes)))
         buf.extend(name_bytes)
         buf.extend(struct.pack(">I", len(self.content)))
@@ -511,6 +548,8 @@ class Data:
         pos = 0
         if data[pos] != PacketType.DATA:
             raise DataError(f"expected DATA type byte, got {data[pos]:#x}")
+        pos += 1
+        _parse_version(data, pos, DataError)
         pos += 1
         name_len, consumed = _read_varint(data, pos)
         pos += consumed
@@ -564,7 +603,7 @@ class APSubscribe:
     registers the subscription and pushes Data as it's produced,
     without requiring per-packet Interests.
 
-    Wire: [type:1=0x03][name_len:varint][name...][flags:1]
+    Wire: [type:1=0x03][version:1][name_len:varint][name...][flags:1]
       flags bit 0: start_from_now (don't push existing content)
     """
     name: Name
@@ -574,6 +613,7 @@ class APSubscribe:
         name_bytes = self.name.to_bytes()
         buf = bytearray()
         buf.append(PacketType.APS_SUBSCRIBE)
+        buf.append(PROTOCOL_VERSION)
         buf.extend(_write_varint(len(name_bytes)))
         buf.extend(name_bytes)
         flags = 0
@@ -587,6 +627,8 @@ class APSubscribe:
         pos = 0
         if data[pos] != PacketType.APS_SUBSCRIBE:
             raise SubscribeError(f"expected APS_SUBSCRIBE type byte, got {data[pos]:#x}")
+        pos += 1
+        _parse_version(data, pos, SubscribeError)
         pos += 1
         try:
             name_len, consumed = _read_varint(data, pos)
@@ -626,7 +668,7 @@ class PropPeer:
     Wire: [type:1=0x04][version:1][rns_addr:16][flags:1]
       flags bit 0: wants_sync (peer wants to sync existing content now)
     """
-    version: int = 1
+    version: int = PROTOCOL_VERSION
     rns_addr: bytes = b""
     wants_sync: bool = False
 
@@ -651,7 +693,7 @@ class PropPeer:
             raise ValueError(f"expected PROP_PEER type byte, got {label}")
         if len(data) < 19:
             raise ValueError("buffer too short for PropPeer")
-        version = data[1]
+        version = _parse_version(data, 1, ValueError)
         rns_addr = data[2:18]
         flags = data[18]
         return cls(
@@ -673,7 +715,7 @@ class CapPeer:
       role: ServerRole enum value (0=ORIGIN, 1=CACHE, 2=PROPAGATION)
       features: 32-bit bitmask of supported features
     """
-    version: int = 1
+    version: int = PROTOCOL_VERSION
     role: int = 0
     features: int = 0
 
@@ -693,7 +735,7 @@ class CapPeer:
         if len(data) < 7:
             raise ValueError("buffer too short for CapPeer")
         return cls(
-            version=data[1],
+            version=_parse_version(data, 1, ValueError),
             role=data[2],
             features=struct.unpack(">I", data[3:7])[0],
         )
@@ -718,7 +760,7 @@ class InvalidateError(Exception):
 class Invalidate:
     """A producer-signed cache-purge control packet.
 
-    Wire: [type:1=0x06][name_len:varint][name...][epoch:8][flags:1]
+    Wire: [type:1=0x06][version:1][name_len:varint][name...][epoch:8][flags:1]
           [sig:64 if flags bit1]
       flags bit 0: is_prefix  → purge every name under ``name``
       flags bit 1: has_signature
@@ -760,6 +802,7 @@ class Invalidate:
         name_bytes = self.name.to_bytes()
         buf = bytearray()
         buf.append(PacketType.INVALIDATE)
+        buf.append(PROTOCOL_VERSION)
         buf.extend(_write_varint(len(name_bytes)))
         buf.extend(name_bytes)
         buf.extend(struct.pack(">Q", self.epoch))
@@ -780,6 +823,8 @@ class Invalidate:
             raise InvalidateError(
                 f"expected INVALIDATE type byte, got {data[pos]:#x}"
             )
+        pos += 1
+        _parse_version(data, pos, InvalidateError)
         pos += 1
         name_len, consumed = _read_varint(data, pos)
         pos += consumed
