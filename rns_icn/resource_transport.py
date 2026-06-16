@@ -22,7 +22,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import struct
-from typing import Callable, Optional
+from collections.abc import Callable
 
 import RNS
 
@@ -58,7 +58,7 @@ def _wrap_payload(data_bytes: bytes) -> bytes:
     return struct.pack(">B", RESOURCE_TYPE_ICN_DATA) + data_bytes
 
 
-def _unwrap_payload(raw: bytes) -> Optional[bytes]:
+def _unwrap_payload(raw: bytes) -> bytes | None:
     """Extract the ICN Data payload if the type tag matches."""
     if len(raw) < 1 or raw[0] != RESOURCE_TYPE_ICN_DATA:
         return None
@@ -80,7 +80,7 @@ class ResourcePublisher:
 
     def __init__(self, link: RNS.Link):
         self._link = link
-        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._loop: asyncio.AbstractEventLoop | None = None
 
     def _get_or_init_loop(self) -> asyncio.AbstractEventLoop:
         if self._loop is None:
@@ -158,8 +158,8 @@ class ResourceListener:
 
     def __init__(self, link: RNS.Link):
         self._link = link
-        self._on_data: Optional[Callable[[Data], None]] = None
-        self._on_raw: Optional[Callable[[bytes], None]] = None
+        self._on_data: Callable[[Data], None] | None = None
+        self._on_raw: Callable[[bytes], None] | None = None
 
         # Set up resource strategy to accept app-level resources via callbacks.
         # This is the correct RNS v1.2.8 API — Destination.set_resource_callback

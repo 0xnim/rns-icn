@@ -7,7 +7,6 @@ so the ICN server retains the same hash across restarts.
 from __future__ import annotations
 
 import os
-from typing import Optional
 
 import RNS
 
@@ -33,7 +32,7 @@ def load_or_create_identity(path: str) -> RNS.Identity:
     return identity
 
 
-def load_transport_identity() -> Optional[RNS.Identity]:
+def load_transport_identity() -> RNS.Identity | None:
     """Try to load the RNS transport identity from the shared instance storage.
 
     Returns the transport identity if running under a shared rnsd instance,

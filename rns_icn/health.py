@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any
 
 from aiohttp import web
 
@@ -113,7 +113,7 @@ def is_health_interest(name) -> bool:
     return name.len() == 2 and name.components[1] == HEALTH_NAME_COMPONENT
 
 
-async def handle_health_interest(server: ICNServer, name, in_face) -> Optional[Dict[str, Any]]:
+async def handle_health_interest(server: ICNServer, name, in_face) -> dict[str, Any] | None:
     """Handle health check Interest — returns Data with health JSON."""
     if not is_health_interest(name):
         return None

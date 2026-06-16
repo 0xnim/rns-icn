@@ -13,12 +13,14 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 import RNS
 
 if TYPE_CHECKING:
     from aiohttp import web
+
+import contextlib
 
 from . import access
 from .config import ServerConfig
@@ -78,7 +80,7 @@ class ICNServer(BaseICNServer):
     def __init__(
         self,
         config: ServerConfig,
-        link_pool: Optional[LinkPool] = None,
+        link_pool: LinkPool | None = None,
     ):
         # Load identity from config
         identity = load_or_create_identity(config.identity_path)
@@ -141,7 +143,7 @@ class ICNServer(BaseICNServer):
         )
 
         # Destination created in start()
-        self.destination: Optional[RNS.Destination] = None
+        self.destination: RNS.Destination | None = None
 
         # Use shared LinkPool or create one
         self._link_pool = link_pool or LinkPool(
@@ -151,17 +153,17 @@ class ICNServer(BaseICNServer):
             known_peers=config.known_peers,
         )
 
-        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._loop: asyncio.AbstractEventLoop | None = None
 
         # HTTP health/metrics API runner (set when http_enabled)
-        self._http_runner: Optional[web.AppRunner] = None
+        self._http_runner: web.AppRunner | None = None
 
         # Resource transport
-        self._resource_listener: Optional[ResourceListener] = None
+        self._resource_listener: ResourceListener | None = None
         self._resource_threshold: int = config.resource_threshold
 
         # Announce management
-        self._announce_task: Optional[asyncio.Task] = None
+        self._announce_task: asyncio.Task | None = None
         self._announce_interval: float = config.announce_interval
 
         # Peer discovery
@@ -177,7 +179,7 @@ class ICNServer(BaseICNServer):
         """Build announce app_data with server role encoded."""
         return b"icn" + bytes([self.role.value])
 
-    async def __aenter__(self) -> "ICNServer":
+    async def __aenter__(self) -> ICNServer:
         await self.start()
         return self
 
@@ -257,7 +259,7 @@ class ICNServer(BaseICNServer):
         else:
             RNS.log(f"ICN: HTTP API disabled (http_enabled={self.config.http_enabled})")
 
-        RNS.log(f"ICN Server: {str(self.identity)}")
+        RNS.log(f"ICN Server: {self.identity!s}")
         RNS.log(f"ICN Destination: {self.destination.hexhash}")
         RNS.log(f"Listening on /{self.app_name}/{self.aspect}")
 
@@ -274,10 +276,8 @@ class ICNServer(BaseICNServer):
         # Cancel periodic announce loop
         if self._announce_task is not None:
             self._announce_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._announce_task
-            except asyncio.CancelledError:
-                pass
             self._announce_task = None
 
         # Stop link pool (tears down all links)
@@ -289,7 +289,7 @@ class ICNServer(BaseICNServer):
 
         self._loop = None
 
-    def announce(self, app_data: Optional[bytes] = None) -> None:
+    def announce(self, app_data: bytes | None = None) -> None:
         """Force an announce of this server's destination."""
         if self.destination is None:
             raise RuntimeError("Server not started. Call start() first.")
@@ -344,7 +344,7 @@ class ICNServer(BaseICNServer):
                 self._send_capabilities(face.id(), peer_hash), self._loop
             )
 
-    async def connect(self, peer_hash: str) -> Optional[FaceId]:
+    async def connect(self, peer_hash: str) -> FaceId | None:
         """Establish an outbound Link to a peer ICN server using LinkPool.
 
         Args:
@@ -403,7 +403,7 @@ class ICNServer(BaseICNServer):
                 RNS.log(f"ICN: Error on link {face_id}: {e}")
                 break
 
-    def publish_content(self, name: Name, content: bytes, sequence: Optional[int] = None) -> None:
+    def publish_content(self, name: Name, content: bytes, sequence: int | None = None) -> None:
         """Publish content into the ContentStore.
 
         Content under a restricted prefix (config.access_rules) is encrypted with
@@ -567,7 +567,8 @@ class ICNServer(BaseICNServer):
         try:
             from .packet import parse_packet
             pkt = parse_packet(raw)
-        except (ValueError, Exception):
+        except Exception:
+            metrics.record_malformed_packet()
             return
 
         # Handle CapPeer — capability exchange on link
@@ -610,7 +611,7 @@ class ICNServer(BaseICNServer):
     def create_large_content_publisher(
         self,
         link: RNS.Link,
-        threshold: Optional[int] = None,
+        threshold: int | None = None,
     ) -> LargeContentPublisher:
         """Create a LargeContentPublisher for chunked content."""
         return LargeContentPublisher(

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 try:
     import tomllib
@@ -20,8 +20,8 @@ class KnownPeer:
 
     name: str
     destination_hash: str  # 32-char hex
-    identity_path: Optional[str] = None
-    aliases: List[str] = field(default_factory=list)
+    identity_path: str | None = None
+    aliases: list[str] = field(default_factory=list)
 
     def destination_bytes(self) -> bytes:
         """Return destination hash as bytes."""
@@ -37,17 +37,17 @@ class AccessRuleConfig:
     identity hashes allowed to read content under the prefix.
     """
 
-    prefix: List[str]
-    consumers: List[str] = field(default_factory=list)
+    prefix: list[str]
+    consumers: list[str] = field(default_factory=list)
 
 
 @dataclass
 class ClientConfig:
     """ICN Client configuration."""
 
-    identity_path: Optional[str] = None
-    mesh_interfaces: List[str] = field(default_factory=lambda: ["UTN Oregon"])
-    known_peers: List[KnownPeer] = field(default_factory=list)
+    identity_path: str | None = None
+    mesh_interfaces: list[str] = field(default_factory=lambda: ["UTN Oregon"])
+    known_peers: list[KnownPeer] = field(default_factory=list)
     connect_timeout: float = 60.0
     fetch_timeout: float = 30.0
     path_request_timeout: float = 30.0
@@ -69,12 +69,12 @@ class ClientConfig:
     # file holds the signed delegation chain for one producer; the client loads
     # them and accepts Data signed by any key the chain authorizes, so a
     # producer can rotate its signing key without breaking verification.
-    rotation_chains: List[str] = field(default_factory=list)
+    rotation_chains: list[str] = field(default_factory=list)
     # Paths to capability files (rns_icn.access.Capability) granting this client
     # read access to restricted prefixes. Each carries a CEK wrapped to this
     # client's identity; the client verifies the producer's signature, unwraps
     # the CEK, and decrypts matching encrypted Data. Default: none.
-    capabilities: List[str] = field(default_factory=list)
+    capabilities: list[str] = field(default_factory=list)
     log_level: str = "INFO"
     log_json: bool = False
 
@@ -90,38 +90,38 @@ class ServerConfig:
     # against this directory — pointing it at a shared rnsd's configdir lets the
     # server ride that transport daemon instead of owning interfaces itself.
     # None uses RNS's default (~/.reticulum).
-    rns_configdir: Optional[str] = None
-    mesh_interfaces: List[str] = field(default_factory=lambda: ["UTN Oregon"])
+    rns_configdir: str | None = None
+    mesh_interfaces: list[str] = field(default_factory=lambda: ["UTN Oregon"])
     role: ServerRole = ServerRole.ORIGIN
     # Optional separate signing identity for key rotation. The server still
     # owns its destination/namespace under ``identity_path`` (the anchor), but
     # signs originated Data with this delegated key — pair it with a rotation
     # chain delegating from the anchor to this key so clients still verify.
     # None = sign with the anchor identity (no rotation).
-    signing_identity_path: Optional[str] = None
+    signing_identity_path: str | None = None
     # Optional path to this producer's rotation bundle (chain + revocations,
     # rns_icn.rotation). When set, the origin publishes it as self-verifying
     # Data at ``/<producer>/_rotation`` so peers can fetch the producer's
     # authorized signing keys (and revocations) over the mesh. None = don't
     # publish a bundle.
-    rotation_chain_path: Optional[str] = None
+    rotation_chain_path: str | None = None
     # Per-prefix access control (rns_icn.access). Each rule restricts a name
     # prefix to a set of consumer identities; the origin encrypts content under
     # restricted prefixes at publish and issues capabilities to the listed
     # consumers. Empty = everything public (no encryption).
-    access_rules: List[AccessRuleConfig] = field(default_factory=list)
+    access_rules: list[AccessRuleConfig] = field(default_factory=list)
     announce_interval: float = 30.0
     reannounce_on_link: bool = True
     cs_max_entries: int = 10000
-    cs_ttl_seconds: Optional[int] = None
+    cs_ttl_seconds: int | None = None
     cs_path: str = "~/.icn/content_store.db"
-    cs_prefix_ttls: Dict[str, int] = field(default_factory=dict)
+    cs_prefix_ttls: dict[str, int] = field(default_factory=dict)
     # Seconds past a Data's freshness_period during which a stale cache hit is
     # served immediately while a background revalidation refreshes it. 0
     # disables stale-while-revalidate (caches forward on staleness instead).
     cs_stale_while_revalidate: int = 0
     resource_threshold: int = 100_000
-    known_peers: List[KnownPeer] = field(default_factory=list)
+    known_peers: list[KnownPeer] = field(default_factory=list)
     log_level: str = "INFO"
     log_json: bool = False
     http_enabled: bool = False
@@ -141,7 +141,7 @@ def load_server_config(path: str = "icn.toml") -> ServerConfig:
     return _dict_to_server_config(data, path)
 
 
-def _load_toml(path: str) -> Dict[str, Any]:
+def _load_toml(path: str) -> dict[str, Any]:
     """Load and parse TOML file."""
     p = Path(path).expanduser()
     if not p.exists():
@@ -150,7 +150,7 @@ def _load_toml(path: str) -> Dict[str, Any]:
         return tomllib.load(f)
 
 
-def _dict_to_client_config(data: Dict[str, Any], base_path: str) -> ClientConfig:
+def _dict_to_client_config(data: dict[str, Any], base_path: str) -> ClientConfig:
     """Convert dict to ClientConfig, expanding paths relative to config file."""
     base_dir = Path(base_path).expanduser().parent
 
@@ -192,7 +192,7 @@ def _dict_to_client_config(data: Dict[str, Any], base_path: str) -> ClientConfig
     )
 
 
-def _dict_to_server_config(data: Dict[str, Any], base_path: str) -> ServerConfig:
+def _dict_to_server_config(data: dict[str, Any], base_path: str) -> ServerConfig:
     """Convert dict to ServerConfig, expanding paths relative to config file."""
     base_dir = Path(base_path).expanduser().parent
 

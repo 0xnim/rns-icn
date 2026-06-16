@@ -91,10 +91,7 @@ class Name:
     def starts_with(self, prefix: Name) -> bool:
         if prefix.len() > self.len():
             return False
-        for a, b in zip(self.components, prefix.components):
-            if a != b:
-                return False
-        return True
+        return all(a == b for a, b in zip(self.components, prefix.components, strict=False))
 
     def is_prefix_of(self, other: Name) -> bool:
         return other.starts_with(self)
@@ -151,8 +148,8 @@ class Name:
         # First component is RNS address (hex)
         try:
             rns_addr = bytes.fromhex(parts[0])
-        except ValueError:
-            raise NameError(f"Invalid RNS address hex: {parts[0]}")
+        except ValueError as e:
+            raise NameError(f"Invalid RNS address hex: {parts[0]}") from e
 
         # Remaining components
         path = []

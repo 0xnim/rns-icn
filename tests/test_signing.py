@@ -41,6 +41,37 @@ def test_sign_verify_round_trip(identity):
     assert data.verify_signature(identity.validate)
 
 
+def test_data_envelope_is_domain_separated(identity):
+    """Protocol v2: the Data signed hash commits to a leading domain tag, so it
+    differs from the bare name+content+hash and from other signed objects."""
+    import hashlib
+
+    from rns_icn.packet import _DATA_DOMAIN
+
+    name = Name(rns_addr(), [b"doc"])
+    data = Data.new(name=name, content=b"hello")
+    # The v1 (untagged) hash must not equal the v2 hash — guards against an
+    # accidental revert that would re-open cross-protocol signature reuse.
+    h = hashlib.blake2b(digest_size=32)
+    h.update(name.to_bytes())
+    h.update(b"hello")
+    h.update(data.metadata.content_hash)
+    assert h.digest() != data.signed_hash()
+    assert data.signed_hash().__class__ is bytes
+    assert _DATA_DOMAIN == b"icn-data\x01"
+
+
+def test_data_and_invalidate_domains_differ(identity):
+    """A Data signature and an Invalidate signature over analogous inputs commit
+    to distinct domains, so one can never be replayed as the other."""
+    from rns_icn.packet import Invalidate
+
+    name = Name(rns_addr(), [b"doc"])
+    data = Data.new(name=name, content=b"")
+    inv = Invalidate(name=name, epoch=0)
+    assert data.signed_hash() != inv.signed_hash()
+
+
 def test_signature_survives_serialization(identity):
     name = Name(rns_addr(), [b"doc"])
     data = Data.new(name=name, content=b"payload").sign(identity.sign)

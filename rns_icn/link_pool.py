@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
-from typing import Dict, List, Optional
 
 import RNS
 
@@ -23,17 +23,17 @@ class LinkPool:
         identity: RNS.Identity,
         app_name: str,
         aspect: str,
-        known_peers: List[KnownPeer],
-        loop: Optional[asyncio.AbstractEventLoop] = None,
+        known_peers: list[KnownPeer],
+        loop: asyncio.AbstractEventLoop | None = None,
     ):
         self.identity = identity
         self.app_name = app_name
         self.aspect = aspect
         self.known_peers = {p.destination_hash: p for p in known_peers}
         self._loop = loop or asyncio.get_event_loop()
-        self._links: Dict[bytes, RNS.Link] = {}      # peer_hash -> link
-        self._health: Dict[bytes, float] = {}        # peer_hash -> last_activity_ts
-        self._monitor_task: Optional[asyncio.Task] = None
+        self._links: dict[bytes, RNS.Link] = {}      # peer_hash -> link
+        self._health: dict[bytes, float] = {}        # peer_hash -> last_activity_ts
+        self._monitor_task: asyncio.Task | None = None
         self._running = False
 
     async def start(self) -> None:
@@ -48,10 +48,8 @@ class LinkPool:
         self._running = False
         if self._monitor_task:
             self._monitor_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._monitor_task
-            except asyncio.CancelledError:
-                pass
         for link in list(self._links.values()):
             try:
                 link.teardown()
@@ -61,7 +59,7 @@ class LinkPool:
         self._links.clear()
         self._health.clear()
 
-    async def get_link(self, peer_hash: bytes) -> Optional[RNS.Link]:
+    async def get_link(self, peer_hash: bytes) -> RNS.Link | None:
         """Get existing active link or create new one."""
         # Return existing active link
         if peer_hash in self._links:
@@ -83,7 +81,7 @@ class LinkPool:
             metrics.record_link_up(peer_hash.hex())
         return link
 
-    def _resolve_identity(self, peer_hash: bytes) -> Optional[RNS.Identity]:
+    def _resolve_identity(self, peer_hash: bytes) -> RNS.Identity | None:
         """Resolve the peer's RNS.Identity from config or the known-destinations table."""
         peer_config = self.known_peers.get(peer_hash.hex())
         if peer_config and peer_config.identity_path:
@@ -105,7 +103,7 @@ class LinkPool:
             await asyncio.sleep(0.25)
         return RNS.Transport.has_path(peer_hash)
 
-    async def _create_link(self, peer_hash: bytes) -> Optional[RNS.Link]:
+    async def _create_link(self, peer_hash: bytes) -> RNS.Link | None:
         """Resolve identity + path, then establish an outbound Link to the peer."""
         identity = self._resolve_identity(peer_hash)
         if identity is None:
@@ -157,7 +155,7 @@ class LinkPool:
                     # Record link down
                     metrics.record_link_down(h.hex())
 
-    def get_link_status(self, peer_hash: bytes) -> Optional[str]:
+    def get_link_status(self, peer_hash: bytes) -> str | None:
         """Get status of a link if it exists."""
         link = self._links.get(peer_hash)
         if link:

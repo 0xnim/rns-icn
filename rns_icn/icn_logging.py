@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import sys
-from typing import Any, Dict, Union
+from typing import Any
 
 from .config import ClientConfig, ServerConfig
 
@@ -14,7 +14,7 @@ class JSONFormatter(logging.Formatter):
     """JSON log formatter for structured logging."""
 
     def format(self, record: logging.LogRecord) -> str:
-        log_entry: Dict[str, Any] = {
+        log_entry: dict[str, Any] = {
             "timestamp": self.formatTime(record),
             "level": record.levelname,
             "logger": record.name,
@@ -33,7 +33,7 @@ class JSONFormatter(logging.Formatter):
         return json.dumps(log_entry)
 
 
-def setup_logging(config: Union[ClientConfig, ServerConfig]) -> None:
+def setup_logging(config: ClientConfig | ServerConfig) -> None:
     """Configure logging based on config."""
     level = getattr(logging, config.log_level.upper(), logging.INFO)
 

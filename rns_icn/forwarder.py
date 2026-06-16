@@ -10,7 +10,6 @@ import asyncio
 import logging
 import os
 from collections.abc import AsyncIterator
-from typing import Optional
 
 from .content_store import ContentStore
 from .face import Face, FaceId
@@ -24,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 class Forwarder:
-    def __init__(self, strategy: Optional[Strategy] = None, cs_max: int = 1000):
+    def __init__(self, strategy: Strategy | None = None, cs_max: int = 1000):
         self.cs = ContentStore(max_entries=cs_max)
         self.fib = Fib()
         self.pit = Pit()
@@ -34,6 +33,9 @@ class Forwarder:
         # Names with an in-flight stale-while-revalidate refresh, so we never
         # fire more than one background revalidation per name at a time.
         self._revalidating: set[Name] = set()
+        # Strong references to fire-and-forget background tasks so the event loop
+        # does not garbage-collect them mid-flight (see _schedule_revalidation).
+        self._bg_tasks: set[asyncio.Future] = set()
 
     @property
     def faces(self) -> dict[FaceId, Face]:
@@ -49,7 +51,7 @@ class Forwarder:
     def add_route(self, prefix: Name, face_id: FaceId, cost: int = 10) -> None:
         self.fib.insert(prefix, face_id, cost)
 
-    async def express(self, interest: Interest, in_face: FaceId) -> Optional[Data]:
+    async def express(self, interest: Interest, in_face: FaceId) -> Data | None:
         """Express an Interest — main consumer API. Returns Data or None."""
         # 1. Loop detection
         if self.pit.check_loop(in_face, interest.nonce):
@@ -97,7 +99,7 @@ class Forwarder:
         return None
 
     async def _forward(self, interest: Interest, in_face: FaceId,
-                       out_face_id: FaceId) -> Optional[Data]:
+                       out_face_id: FaceId) -> Data | None:
         name = interest.name
 
         # Hop-limit enforcement (defence-in-depth beyond nonce loop detection).
@@ -175,9 +177,11 @@ class Forwarder:
             finally:
                 self._revalidating.discard(name)
 
-        asyncio.ensure_future(_run())
+        task = asyncio.ensure_future(_run())
+        self._bg_tasks.add(task)
+        task.add_done_callback(self._bg_tasks.discard)
 
-    def _notify_waiters(self, name: Name, data: Optional[Data]) -> None:
+    def _notify_waiters(self, name: Name, data: Data | None) -> None:
         notifiers = self._pit_notifiers.pop(name, [])
         for fut in notifiers:
             if not fut.done():
@@ -186,12 +190,22 @@ class Forwarder:
                 else:
                     fut.cancel()
 
-    async def receive_data(self, data: Data, in_face: FaceId) -> None:
+    async def receive_data(
+        self, data: Data, in_face: FaceId, cache_unsolicited: bool = False
+    ) -> None:
         """Receive incoming Data — satisfies PIT, caches in CS.
 
         PIT entries are keyed by the Interest name (which has no content hash).
         Strip any content hash from the Data name for PIT lookup so it
         matches the Interest's PIT entry regardless of content hash.
+
+        By default only Data that satisfies a pending Interest (a PIT match) is
+        cached — the standard NDN rule, so an unauthenticated peer cannot inject
+        unsolicited content into the Content Store. Trusted push flows that
+        legitimately deliver unsolicited content (propagation replication between
+        peered servers) set ``cache_unsolicited=True`` to opt in. Cache poisoning
+        is in any case caught by consumer-side signature verification; this gate
+        narrows the surface a forwarder exposes.
         """
         # Strip content hash for PIT lookup (PIT entries are keyed by
         # interest name, which never carries a content hash)
@@ -199,7 +213,8 @@ class Forwarder:
         matched = self.pit.satisfy(pit_name)
         if matched is not None:
             self._notify_waiters(pit_name, data)
-        self.cs.insert(data.name, data)
+        if matched is not None or cache_unsolicited:
+            self.cs.insert(data.name, data)
         self.pit.purge_expired()
 
     async def stream_fetch(
@@ -208,7 +223,7 @@ class Forwarder:
         in_face: FaceId = 0,
         start_sequence: int = 0,
         lifetime_ms: int = 4000,
-        max_segments: Optional[int] = None,
+        max_segments: int | None = None,
     ) -> AsyncIterator[Data]:
         """Fetch streaming data incrementally using InterestSelector.
 

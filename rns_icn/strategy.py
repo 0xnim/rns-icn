@@ -5,7 +5,6 @@ from __future__ import annotations
 import time
 from abc import ABC, abstractmethod
 from enum import Enum
-from typing import Optional
 
 from .face import FaceId
 from .packet import Data, Interest
@@ -26,9 +25,9 @@ class Strategy(ABC):
         self,
         interest: Interest,
         fib_faces: list[tuple[FaceId, int]],
-        pit_hit: Optional[PitEntry],
-        cs_hit: Optional[Data],
-    ) -> tuple[StrategyDecision, Optional[FaceId]]:
+        pit_hit: PitEntry | None,
+        cs_hit: Data | None,
+    ) -> tuple[StrategyDecision, FaceId | None]:
         """Returns (decision, face_id) where face_id is set for FORWARD_TO."""
         ...
 
@@ -61,10 +60,13 @@ class BestRoute(Strategy):
 
     @staticmethod
     def _sequence_satisfied(interest: Interest, data: Data) -> bool:
-        if interest.selector is not None and interest.selector.min_sequence is not None:
-            if data.metadata.sequence is None or data.metadata.sequence < interest.selector.min_sequence:
-                return False
-        return True
+        selector = interest.selector
+        if selector is None or selector.min_sequence is None:
+            return True
+        return (
+            data.metadata.sequence is not None
+            and data.metadata.sequence >= selector.min_sequence
+        )
 
     @classmethod
     def _selector_satisfied(cls, interest: Interest, data: Data) -> bool:
@@ -72,7 +74,7 @@ class BestRoute(Strategy):
             return False
         return cls._sequence_satisfied(interest, data)
 
-    def _first_usable_face(self, fib_faces: list[tuple[FaceId, int]]) -> Optional[FaceId]:
+    def _first_usable_face(self, fib_faces: list[tuple[FaceId, int]]) -> FaceId | None:
         for face_id, _ in fib_faces:
             if not self._is_in_backoff(face_id):
                 return face_id
@@ -88,9 +90,9 @@ class BestRoute(Strategy):
         self,
         interest: Interest,
         fib_faces: list[tuple[FaceId, int]],
-        pit_hit: Optional[PitEntry],
-        cs_hit: Optional[Data],
-    ) -> tuple[StrategyDecision, Optional[FaceId]]:
+        pit_hit: PitEntry | None,
+        cs_hit: Data | None,
+    ) -> tuple[StrategyDecision, FaceId | None]:
 
         if cs_hit is not None and self._selector_satisfied(interest, cs_hit):
             # Cache hit acceptable to the consumer. If it is stale-but-servable
@@ -113,7 +115,7 @@ class BestRoute(Strategy):
 
 
 class _FailureRecord:
-    __slots__ = ("last_failure", "consecutive_failures")
+    __slots__ = ("consecutive_failures", "last_failure")
     def __init__(self):
         self.last_failure = 0.0
         self.consecutive_failures = 0

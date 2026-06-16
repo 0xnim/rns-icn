@@ -14,14 +14,22 @@ import hashlib
 import os
 import struct
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import IntEnum
-from typing import Callable, Optional
 
 from .name import Name
 
 # RNS Identity.sign() produces a 64-byte Ed25519 signature.
 SIGNATURE_BYTES = 64
+
+# Domain-separation tags prepended to signed hashes (protocol v2). Each producer-
+# signed object commits to a distinct tag so a signature over one can never be
+# replayed as another, matching the rotation/revocation/capability constructions.
+# NOTE: adding these changed the signed bytes — v1 signatures do not verify under
+# v2 and vice versa (see PROTOCOL.md §10 and CHANGELOG).
+_DATA_DOMAIN = b"icn-data\x01"
+_INVALIDATE_DOMAIN = b"icn-invalidate\x01"
 
 # Default Interest hop limit. Each forwarding hop decrements it; an Interest
 # is dropped (not forwarded further) once it reaches 0. Defence-in-depth
@@ -81,7 +89,7 @@ class InterestSelector:
     min_sequence: minimum sequence number accepted. Used for stream fetch:
       'I already have segments 1-5, give me segment 6 or later.'
     """
-    min_sequence: Optional[int] = None
+    min_sequence: int | None = None
 
     def to_bytes(self) -> bytes:
         return struct.pack(">Q", self.min_sequence or 0)
@@ -117,7 +125,7 @@ class Interest:
     lifetime_ms: int = 4000
     can_be_prefix: bool = False
     must_be_fresh: bool = False
-    selector: Optional[InterestSelector] = None
+    selector: InterestSelector | None = None
     hop_limit: int = DEFAULT_HOP_LIMIT
 
     def __post_init__(self):
@@ -251,18 +259,18 @@ class Freshness:
 
 @dataclass
 class DataMetadata:
-    content_hash: Optional[bytes] = None
-    sequence: Optional[int] = None
+    content_hash: bytes | None = None
+    sequence: int | None = None
     freshness: Freshness = field(default_factory=Freshness)
     # Declared freshness lifetime in seconds. A cache treats the Data as fresh
     # until it has been held longer than this, then stale. None = no declared
     # lifetime (caches consider it fresh until TTL eviction — legacy behaviour).
-    freshness_period: Optional[int] = None
+    freshness_period: int | None = None
     # Unix timestamp (seconds) the producer signed this Data at. Folded into the
     # signed envelope (see Data.signed_hash) so it is authenticated, letting a
     # consumer detect a cache/relay replaying a stale-but-validly-signed version
     # (rollback). None on unsigned Data and on pre-3.1 signed Data.
-    signed_at: Optional[int] = None
+    signed_at: int | None = None
     # True when ``content`` is ciphertext for a restricted prefix (Phase 3.3).
     # Bound into the signed envelope so a relay cannot flip it; a consumer with a
     # capability for the name decrypts it (see rns_icn.access). Caches store and
@@ -352,7 +360,7 @@ class Data:
     """
     name: Name
     content: bytes
-    signature: Optional[bytes] = None
+    signature: bytes | None = None
     metadata: DataMetadata = field(default_factory=DataMetadata)
 
     @classmethod
@@ -386,16 +394,19 @@ class Data:
 
     def signed_hash(self) -> bytes:
         h = hashlib.blake2b(digest_size=32)
+        h.update(_DATA_DOMAIN)
         h.update(self.name.to_bytes())
         h.update(self.content)
         if self.metadata.content_hash is not None:
             h.update(self.metadata.content_hash)
-        # Sequence and signed-at are domain-tagged so they bind into the
+        # Sequence and signed-at are field-tagged so they bind into the
         # envelope unambiguously (and distinguish "value 0" from "absent").
         # A relay that tampers with either field, or strips it, breaks the
         # signature; this is what lets a consumer trust them for rollback
-        # detection. Appended after the legacy fields so pre-3.1 signatures
-        # over name+content+hash still verify.
+        # detection. Appended after the core fields, each behind a one-byte tag,
+        # so a signature made before a given field existed still verifies within
+        # the same protocol version (the leading _DATA_DOMAIN is what makes v1
+        # and v2 signatures mutually invalid — see CHANGELOG).
         if self.metadata.sequence is not None:
             h.update(b"\x01")
             h.update(struct.pack(">Q", self.metadata.sequence))
@@ -413,7 +424,7 @@ class Data:
     def sign(
         self,
         signer: Callable[[bytes], bytes],
-        signed_at: Optional[int] = None,
+        signed_at: int | None = None,
     ) -> Data:
         """Attach a producer signature over signed_hash().
 
@@ -436,7 +447,7 @@ class Data:
         self.signature = sig
         return self
 
-    def freshness_key(self) -> Optional[tuple[int, int]]:
+    def freshness_key(self) -> tuple[int, int] | None:
         """Authenticated ``(signed_at, sequence)`` ordering key, or None.
 
         Only meaningful for signed Data: an unsigned timestamp/sequence is
@@ -721,10 +732,11 @@ class Invalidate:
     name: Name
     epoch: int = 0
     is_prefix: bool = False
-    signature: Optional[bytes] = None
+    signature: bytes | None = None
 
     def signed_hash(self) -> bytes:
         h = hashlib.blake2b(digest_size=32)
+        h.update(_INVALIDATE_DOMAIN)
         h.update(self.name.to_bytes())
         h.update(struct.pack(">Q", self.epoch))
         h.update(b"\x01" if self.is_prefix else b"\x00")
@@ -796,12 +808,12 @@ class Invalidate:
 class Packet:
     """A parsed ICN packet with known type."""
     type: PacketType
-    interest: Optional[Interest] = None
-    data: Optional[Data] = None
-    subscribe: Optional[APSubscribe] = None
-    peer: Optional[PropPeer] = None
-    cap_peer: Optional[CapPeer] = None
-    invalidate: Optional[Invalidate] = None
+    interest: Interest | None = None
+    data: Data | None = None
+    subscribe: APSubscribe | None = None
+    peer: PropPeer | None = None
+    cap_peer: CapPeer | None = None
+    invalidate: Invalidate | None = None
 
 
 def parse_packet(data: bytes) -> Packet:

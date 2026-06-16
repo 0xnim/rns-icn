@@ -4,9 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rns-icn"
-version = "0.1.0"
+version = "0.2.0"
 description = "Information-Centric Networking for reticulum-py"
 requires-python = ">=3.10"
+license = { text = "MIT" }
 dependencies = [
     "rns>=1.2",
     "aiohttp>=3.9",
@@ -53,14 +54,27 @@ exclude_also = [
 [tool.ruff]
 line-length = 100
 target-version = "py310"
-# scripts/dev holds archived throwaway dev scripts — not linted.
-extend-exclude = ["scripts/dev"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I"]
-# E501 (line length): not worth reflowing the existing tree.
-# E741 (ambiguous name `l`): tolerated in test comprehensions.
-ignore = ["E501", "E741"]
+# E/F/I: pycodestyle errors, pyflakes, isort. B: bugbear (real bug patterns).
+# ASYNC: async pitfalls. C4: comprehensions. SIM: simplifications. PT: pytest
+# style. UP: pyupgrade. RUF: ruff-specific.
+select = ["E", "F", "I", "B", "ASYNC", "C4", "SIM", "PT", "UP", "RUF"]
+ignore = [
+    "E501",        # line length: not worth reflowing the existing tree
+    "E741",        # ambiguous name `l`: tolerated in test comprehensions
+    "SIM105",      # try/except/pass is clearer than contextlib.suppress here
+    "ASYNC230",    # blocking file I/O: project is asyncio (these assume trio/anyio)
+    "ASYNC240",    # pathlib in async: ditto — trivial path ops, not real I/O
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests favour readability over lint purity: tolerate multi-assert blocks,
+# broad pytest.raises, zip without strict, and fire-and-forget tasks under the
+# test's own control.
+"tests/**" = ["B905", "B007", "B017", "PT011", "PT018", "RUF005", "RUF006",
+              "RUF015", "RUF059", "SIM102", "SIM103", "SIM110", "SIM118",
+              "C401", "ASYNC110"]
 
 [tool.mypy]
 python_version = "3.10"

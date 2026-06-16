@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import sqlite3
 import time
 from pathlib import Path
-from typing import Dict, Optional
 
 from .name import Name
 from .packet import Data, DataMetadata, Freshness
@@ -26,10 +26,10 @@ class ContentStore:
 
     def __init__(
         self,
-        path: Optional[str] = None,
+        path: str | None = None,
         max_entries: int = 10000,
-        default_ttl: Optional[int] = None,
-        prefix_ttls: Optional[Dict[str, int]] = None,
+        default_ttl: int | None = None,
+        prefix_ttls: dict[str, int] | None = None,
     ):
         if path is None:
             path = ":memory:"
@@ -130,12 +130,10 @@ class ContentStore:
         except sqlite3.DatabaseError:
             # Row-by-row salvage
             for row in self._conn.execute("SELECT * FROM content"):
-                try:
+                with contextlib.suppress(sqlite3.DatabaseError):
                     self._conn.execute(
                         "INSERT INTO content_new VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", row
                     )
-                except sqlite3.DatabaseError:
-                    pass
         # Swap tables
         self._conn.execute("DROP TABLE IF EXISTS content")
         self._conn.execute("DROP TABLE IF EXISTS name_prefixes")
@@ -148,7 +146,7 @@ class ContentStore:
     def _prefix_hash(self, name: Name) -> bytes:
         return hashlib.blake2b(name.to_bytes(), digest_size=32).digest()
 
-    def _compute_ttl(self, name: Name) -> Optional[int]:
+    def _compute_ttl(self, name: Name) -> int | None:
         """Compute TTL for a name based on prefix config."""
         # Check per-prefix TTLs (longest match first)
         name_str = str(name)
@@ -159,7 +157,7 @@ class ContentStore:
                 return ttl
         return self._default_ttl
 
-    def _calculate_expires_at(self, inserted_at: int, ttl: Optional[int]) -> Optional[int]:
+    def _calculate_expires_at(self, inserted_at: int, ttl: int | None) -> int | None:
         if ttl is None or ttl <= 0:
             return None
         return inserted_at + ttl
@@ -244,7 +242,7 @@ class ContentStore:
             evicted += 1
         return evicted
 
-    def get(self, name: Name) -> Optional[Data]:
+    def get(self, name: Name) -> Data | None:
         """Get Data by exact name match."""
         self._purge_expired_internal()
 
@@ -271,7 +269,7 @@ class ContentStore:
         return Data(name=stored_name, content=content_bytes,
                     signature=signature, metadata=metadata)
 
-    def get_prefix(self, prefix: Name) -> Optional[Data]:
+    def get_prefix(self, prefix: Name) -> Data | None:
         """Longest prefix match: find stored name that has this prefix."""
         self._purge_expired_internal()
 
@@ -312,15 +310,15 @@ class ContentStore:
         except (json.JSONDecodeError, KeyError, ValueError):
             return False
 
-    def _parse_signature(self, metadata_json: str) -> Optional[bytes]:
+    def _parse_signature(self, metadata_json: str) -> bytes | None:
         sig_hex = json.loads(metadata_json).get("signature")
         return bytes.fromhex(sig_hex) if sig_hex else None
 
     def _parse_metadata(
         self,
         metadata_json: str,
-        inserted_at: Optional[int] = None,
-        freshness_period: Optional[int] = None,
+        inserted_at: int | None = None,
+        freshness_period: int | None = None,
     ) -> DataMetadata:
         """Reconstruct metadata, computing freshness dynamically from age.
 
@@ -451,14 +449,12 @@ class ContentStore:
         self._conn.close()
 
     def __del__(self):
-        try:
+        with contextlib.suppress(Exception):
             self.close()
-        except Exception:
-            pass
 
     # For ICNServer compatibility
     @property
-    def _entries(self) -> Dict[Name, Data]:
+    def _entries(self) -> dict[Name, Data]:
         """Compatibility: return all entries as dict (for manifest building)."""
         entries = {}
         for row in self._conn.execute("SELECT name_bytes, content_bytes, metadata_json FROM content"):

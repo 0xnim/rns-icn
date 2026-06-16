@@ -6,7 +6,6 @@ import asyncio
 import os
 import time
 from pathlib import Path
-from typing import Optional
 
 import RNS
 
@@ -32,9 +31,9 @@ class ICNClient:
     def __init__(self, config: ClientConfig):
         self.config = config
         self._started_rns = False
-        self._identity: Optional[RNS.Identity] = None
-        self._link_pool: Optional[LinkPool] = None
-        self._forwarder: Optional[Forwarder] = None
+        self._identity: RNS.Identity | None = None
+        self._link_pool: LinkPool | None = None
+        self._forwarder: Forwarder | None = None
         self._face_counter = 1000
         # name → highest authenticated (signed_at, sequence) accepted so far,
         # used for rollback detection when config.reject_rollback is set.
@@ -48,13 +47,13 @@ class ICNClient:
         # access to restricted prefixes, loaded from config.capabilities.
         self._capability_store: dict[bytes, list[access.Capability]] = {}
 
-    async def __aenter__(self) -> "ICNClient":
+    async def __aenter__(self) -> ICNClient:
         return await self.start()
 
     async def __aexit__(self, *exc) -> None:
         await self.shutdown()
 
-    async def start(self) -> "ICNClient":
+    async def start(self) -> ICNClient:
         """Initialize RNS, identity, forwarder, and link pool."""
         # Setup logging first
         setup_logging(self.config)
@@ -139,10 +138,10 @@ class ICNClient:
         self,
         name: Name,
         peer_hash: bytes,
-        timeout: Optional[float] = None,
-        max_retries: Optional[int] = None,
+        timeout: float | None = None,
+        max_retries: int | None = None,
         apply_policy: bool = True,
-    ) -> Optional[Data]:
+    ) -> Data | None:
         """Express Interest to peer, wait for Data with retry/backoff.
 
         ``apply_policy`` runs the signature and rollback checks (the default).
@@ -215,7 +214,7 @@ class ICNClient:
             raise last_error
         return None
 
-    def _check_signature(self, data: Data) -> tuple[bool, Optional[Exception]]:
+    def _check_signature(self, data: Data) -> tuple[bool, Exception | None]:
         """Verify a Data packet's producer signature per policy.
 
         Trust anchor is the producer's RNS identity, recalled from the name's
@@ -264,7 +263,7 @@ class ICNClient:
             return False, ValueError("Data is unsigned but signature is required")
         return True, None
 
-    def _check_rollback(self, data: Data) -> tuple[bool, Optional[Exception]]:
+    def _check_rollback(self, data: Data) -> tuple[bool, Exception | None]:
         """Reject signed Data that rolls back to an older authenticated version.
 
         Tracks the highest authenticated ``(signed_at, sequence)`` accepted per
@@ -353,8 +352,8 @@ class ICNClient:
         self,
         producer_addr: bytes,
         peer_hash: bytes,
-        timeout: Optional[float] = None,
-    ) -> Optional[list[bytes]]:
+        timeout: float | None = None,
+    ) -> list[bytes] | None:
         """Fetch a producer's rotation bundle over the mesh and load it.
 
         Retrieves the self-verifying bundle published at
@@ -382,8 +381,8 @@ class ICNClient:
     async def fetch_manifest(
         self,
         producer_addr: bytes,
-        timeout: Optional[float] = None,
-    ) -> Optional[Manifest]:
+        timeout: float | None = None,
+    ) -> Manifest | None:
         """Fetch and parse manifest from producer."""
         manifest_name = Name(producer_addr, [b"manifest"])
         data = await self.fetch(manifest_name, producer_addr, timeout)
@@ -395,8 +394,8 @@ class ICNClient:
         self,
         entry: ManifestEntry,
         producer_addr: bytes,
-        timeout: Optional[float] = None,
-    ) -> Optional[bytes]:
+        timeout: float | None = None,
+    ) -> bytes | None:
         """Fetch content by manifest entry."""
         data = await self.fetch(entry.name, producer_addr, timeout)
         return data.content if data else None

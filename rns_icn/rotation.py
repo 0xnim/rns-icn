@@ -26,9 +26,9 @@ from __future__ import annotations
 import hashlib
 import struct
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, List, Optional
 
 import RNS
 
@@ -96,7 +96,7 @@ class KeyRotation:
     epoch: int               # generation, starts at 1
     prev_public_key: bytes   # signer's public key
     new_public_key: bytes    # delegated public key
-    signature: Optional[bytes] = None
+    signature: bytes | None = None
 
     def __post_init__(self) -> None:
         if len(self.producer) != RNS_ADDR_BYTES:
@@ -117,7 +117,7 @@ class KeyRotation:
         h.update(self.new_public_key)
         return h.digest()
 
-    def sign(self, signer: Callable[[bytes], bytes]) -> "KeyRotation":
+    def sign(self, signer: Callable[[bytes], bytes]) -> KeyRotation:
         """Sign with ``prev``'s signer (typically ``prev_identity.sign``)."""
         sig = signer(self.signed_hash())
         if len(sig) != SIGNATURE_BYTES:
@@ -144,7 +144,7 @@ class KeyRotation:
         epoch: int,
         prev_identity: RNS.Identity,
         new_identity: RNS.Identity,
-    ) -> "KeyRotation":
+    ) -> KeyRotation:
         """Mint and sign a rotation certificate.
 
         ``prev_identity`` must hold private keys (it signs the delegation);
@@ -170,7 +170,7 @@ class KeyRotation:
         return bytes(buf)
 
     @classmethod
-    def from_bytes(cls, data: bytes) -> "KeyRotation":
+    def from_bytes(cls, data: bytes) -> KeyRotation:
         fixed = RNS_ADDR_BYTES + 8 + 2 * PUBLIC_KEY_BYTES + 1
         if len(data) < fixed:
             raise RotationError("buffer too short for KeyRotation")
@@ -210,7 +210,7 @@ class Revocation:
     revoked_public_key: bytes  # 64-byte key being revoked
     anchor_public_key: bytes   # 64-byte anchor key (the signer)
     revoked_at: int            # unix seconds, for audit/ordering
-    signature: Optional[bytes] = None
+    signature: bytes | None = None
 
     def __post_init__(self) -> None:
         if len(self.producer) != RNS_ADDR_BYTES:
@@ -231,7 +231,7 @@ class Revocation:
         h.update(self.revoked_public_key)
         return h.digest()
 
-    def sign(self, signer: Callable[[bytes], bytes]) -> "Revocation":
+    def sign(self, signer: Callable[[bytes], bytes]) -> Revocation:
         """Sign with the anchor's signer (typically ``anchor_identity.sign``)."""
         sig = signer(self.signed_hash())
         if len(sig) != SIGNATURE_BYTES:
@@ -257,8 +257,8 @@ class Revocation:
         producer: bytes,
         revoked_public_key: bytes,
         anchor_identity: RNS.Identity,
-        revoked_at: Optional[int] = None,
-    ) -> "Revocation":
+        revoked_at: int | None = None,
+    ) -> Revocation:
         """Mint and sign a revocation. ``anchor_identity`` must hold private keys."""
         rev = cls(
             producer=producer,
@@ -280,7 +280,7 @@ class Revocation:
         return bytes(buf)
 
     @classmethod
-    def from_bytes(cls, data: bytes) -> "Revocation":
+    def from_bytes(cls, data: bytes) -> Revocation:
         fixed = RNS_ADDR_BYTES + 8 + 2 * PUBLIC_KEY_BYTES + 1
         if len(data) < fixed:
             raise RotationError("buffer too short for Revocation")
@@ -307,9 +307,9 @@ class Revocation:
 
 def verify_rotation_chain(
     producer_addr: bytes,
-    certs: List[KeyRotation],
-    revocations: Optional[List["Revocation"]] = None,
-) -> List[bytes]:
+    certs: list[KeyRotation],
+    revocations: list[Revocation] | None = None,
+) -> list[bytes]:
     """Validate an ordered rotation chain and return the authorized public keys.
 
     Returns ``[anchor_pubkey, gen1_pubkey, ...]`` — the anchor plus every
@@ -349,8 +349,8 @@ def verify_rotation_chain(
 def _revoked_key_set(
     producer_addr: bytes,
     anchor_pub: bytes,
-    certs: List[KeyRotation],
-    revocations: List["Revocation"],
+    certs: list[KeyRotation],
+    revocations: list[Revocation],
 ) -> set[bytes]:
     """Resolve the full set of revoked keys, including delegated descendants.
 
@@ -378,9 +378,9 @@ def _revoked_key_set(
 
 def authorized_validators(
     producer_addr: bytes,
-    certs: List[KeyRotation],
-    revocations: Optional[List["Revocation"]] = None,
-) -> List[Callable[[bytes, bytes], bool]]:
+    certs: list[KeyRotation],
+    revocations: list[Revocation] | None = None,
+) -> list[Callable[[bytes, bytes], bool]]:
     """Validators (``RNS.Identity.validate``-shaped) for every authorized key."""
     return [
         _identity_from_public_key(pub).validate
@@ -391,7 +391,7 @@ def authorized_validators(
 # ── Chain serialization (one producer's chain per file) ──
 
 
-def chain_to_bytes(certs: List[KeyRotation]) -> bytes:
+def chain_to_bytes(certs: list[KeyRotation]) -> bytes:
     buf = bytearray(struct.pack(">H", len(certs)))
     for cert in certs:
         cb = cert.to_bytes()
@@ -400,12 +400,12 @@ def chain_to_bytes(certs: List[KeyRotation]) -> bytes:
     return bytes(buf)
 
 
-def chain_from_bytes(data: bytes) -> List[KeyRotation]:
+def chain_from_bytes(data: bytes) -> list[KeyRotation]:
     if len(data) < 2:
         raise RotationError("buffer too short for chain")
     count = struct.unpack(">H", data[:2])[0]
     pos = 2
-    certs: List[KeyRotation] = []
+    certs: list[KeyRotation] = []
     for _ in range(count):
         if pos + 2 > len(data):
             raise RotationError("buffer too short for cert length")
@@ -418,11 +418,11 @@ def chain_from_bytes(data: bytes) -> List[KeyRotation]:
     return certs
 
 
-def save_rotation_chain(path: str, certs: List[KeyRotation]) -> None:
+def save_rotation_chain(path: str, certs: list[KeyRotation]) -> None:
     Path(path).expanduser().write_bytes(chain_to_bytes(certs))
 
 
-def load_rotation_chain(path: str) -> List[KeyRotation]:
+def load_rotation_chain(path: str) -> list[KeyRotation]:
     return chain_from_bytes(Path(path).expanduser().read_bytes())
 
 
@@ -440,8 +440,8 @@ class RotationBundle:
     after the certs) — so old and new files interoperate.
     """
 
-    certs: List[KeyRotation] = field(default_factory=list)
-    revocations: List[Revocation] = field(default_factory=list)
+    certs: list[KeyRotation] = field(default_factory=list)
+    revocations: list[Revocation] = field(default_factory=list)
 
     def to_bytes(self) -> bytes:
         buf = bytearray(chain_to_bytes(self.certs))
@@ -453,12 +453,12 @@ class RotationBundle:
         return bytes(buf)
 
     @classmethod
-    def from_bytes(cls, data: bytes) -> "RotationBundle":
+    def from_bytes(cls, data: bytes) -> RotationBundle:
         if len(data) < 2:
             raise RotationError("buffer too short for bundle")
         count = struct.unpack(">H", data[:2])[0]
         pos = 2
-        certs: List[KeyRotation] = []
+        certs: list[KeyRotation] = []
         for _ in range(count):
             if pos + 2 > len(data):
                 raise RotationError("buffer too short for cert length")
@@ -468,7 +468,7 @@ class RotationBundle:
                 raise RotationError("buffer too short for cert body")
             certs.append(KeyRotation.from_bytes(data[pos:pos + clen]))
             pos += clen
-        revocations: List[Revocation] = []
+        revocations: list[Revocation] = []
         # A legacy chain blob ends here; a bundle carries a revocation section.
         if pos < len(data):
             if pos + 2 > len(data):
@@ -486,13 +486,13 @@ class RotationBundle:
                 pos += rlen
         return cls(certs=certs, revocations=revocations)
 
-    def verify(self, producer_addr: bytes) -> List[bytes]:
+    def verify(self, producer_addr: bytes) -> list[bytes]:
         """Validate the whole bundle and return the authorized public keys."""
         return verify_rotation_chain(producer_addr, self.certs, self.revocations)
 
     def validators(
         self, producer_addr: bytes
-    ) -> List[Callable[[bytes, bytes], bool]]:
+    ) -> list[Callable[[bytes, bytes], bool]]:
         return authorized_validators(producer_addr, self.certs, self.revocations)
 
 

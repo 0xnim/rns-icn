@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
 
 from .face import FaceId
 from .name import Name
@@ -46,12 +45,13 @@ class Fib:
     def remove_prefix(self, prefix: Name) -> None:
         self._entries = [e for e in self._entries if not e.prefix.starts_with(prefix)]
 
-    def lookup(self, name: Name) -> Optional[list[tuple[FaceId, int]]]:
-        best: Optional[FibEntry] = None
+    def lookup(self, name: Name) -> list[tuple[FaceId, int]] | None:
+        best: FibEntry | None = None
         for entry in self._entries:
-            if name.starts_with(entry.prefix):
-                if best is None or entry.prefix.len() > best.prefix.len():
-                    best = entry
+            if name.starts_with(entry.prefix) and (
+                best is None or entry.prefix.len() > best.prefix.len()
+            ):
+                best = entry
         return list(best.faces) if best else None
 
     def __len__(self) -> int:

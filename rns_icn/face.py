@@ -6,7 +6,7 @@ import asyncio
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from .packet import Data, Interest, PacketType
 
@@ -27,7 +27,7 @@ class FaceCapabilities:
 
 class Face(ABC):
     @abstractmethod
-    async def express_interest(self, interest: Interest) -> Optional[Data]:
+    async def express_interest(self, interest: Interest) -> Data | None:
         ...
 
     @abstractmethod
@@ -58,7 +58,7 @@ class TestFace(Face):
     def __init__(self, face_id: FaceId):
         self._id = face_id
         self._outgoing: asyncio.Queue[bytes] = asyncio.Queue()
-        self._incoming: Optional[asyncio.Queue[bytes]] = None
+        self._incoming: asyncio.Queue[bytes] | None = None
 
     def connect(self, other: TestFace):
         """Wire two TestFaces together."""
@@ -76,7 +76,7 @@ class TestFace(Face):
     async def send_raw(self, raw: bytes) -> None:
         await self._outgoing.put(raw)
 
-    async def recv_raw(self) -> Optional[bytes]:
+    async def recv_raw(self) -> bytes | None:
         """Receive raw bytes from the connected peer (blocks briefly)."""
         if self._incoming is None:
             return None
@@ -85,7 +85,7 @@ class TestFace(Face):
         except asyncio.TimeoutError:
             return None
 
-    async def recv_packet(self) -> Optional[PacketType]:
+    async def recv_packet(self) -> PacketType | None:
         """Receive and parse a raw packet. Returns the type.
         DEPRECATED: Use recv_raw() instead."""
         raw = await self.recv_raw()
@@ -93,7 +93,7 @@ class TestFace(Face):
             return None
         return PacketType(raw[0])
 
-    async def express_interest(self, interest: Interest) -> Optional[Data]:
+    async def express_interest(self, interest: Interest) -> Data | None:
         """Forward Interest to peer, wait for Data."""
         await self._outgoing.put(interest.to_bytes())
         if self._incoming is None:
@@ -124,7 +124,7 @@ def test_face_pair() -> tuple[TestFace, TestFace]:
 
 
 # Not a pytest test despite the test_ prefix — it's a connected-pair factory.
-setattr(test_face_pair, "__test__", False)
+test_face_pair.__test__ = False  # type: ignore[attr-defined]
 
 
 # ── LinkFace: Face over RNS Link with Channel ──
@@ -141,14 +141,14 @@ class LinkFace(Face):
     Bridges from RNS's thread-based callback model into asyncio.
     """
 
-    def __init__(self, face_id: FaceId, link: "RNS.Link", loop: asyncio.AbstractEventLoop | None = None):
+    def __init__(self, face_id: FaceId, link: RNS.Link, loop: asyncio.AbstractEventLoop | None = None):
         from RNS.Channel import ChannelException, MessageBase
 
         class _ICNMessage(MessageBase):
             """Channel message wrapping raw ICN Interest/Data bytes."""
             MSGTYPE = 0x01
 
-            def __init__(self, raw: Optional[bytes] = None):
+            def __init__(self, raw: bytes | None = None):
                 self.raw = raw if raw is not None else b""
 
             def pack(self) -> bytes:
@@ -200,7 +200,7 @@ class LinkFace(Face):
             # The caller's timeout will handle it
             pass
 
-    async def express_interest(self, interest: Interest) -> Optional[Data]:
+    async def express_interest(self, interest: Interest) -> Data | None:
         raw = interest.to_bytes()
         self._send(raw)
 
@@ -235,7 +235,7 @@ class LinkFace(Face):
         return self._id
 
     @property
-    def link(self) -> "RNS.Link":
+    def link(self) -> RNS.Link:
         return self._link
 
     def close(self) -> None:

@@ -71,6 +71,12 @@ def test_metrics_collector():
     counters = m.get_counters()
     assert counters["fetch_total"] == 3
     assert counters["fetch_errors"] == 1
+    assert counters["malformed_packets"] == 0
+
+    # Malformed-packet counter (dropped unparseable packets)
+    m.record_malformed_packet()
+    m.record_malformed_packet()
+    assert m.get_counters()["malformed_packets"] == 2
 
     # Link uptime
     m.record_link_up("peer1")
@@ -124,20 +130,19 @@ async def test_http_health_endpoint():
     app.router.add_get("/health", health_handler)
     app.router.add_get("/metrics", metrics_handler)
 
-    async with TestServer(app) as server:
-        async with TestClient(server) as client:
-            resp = await client.get("/health")
-            assert resp.status == 200
-            data = await resp.json()
-            assert data["status"] == "healthy"
-            assert data["content_store"]["entries"] == 5
-            assert data["links"]["active"] == 1
+    async with TestServer(app) as server, TestClient(server) as client:
+        resp = await client.get("/health")
+        assert resp.status == 200
+        data = await resp.json()
+        assert data["status"] == "healthy"
+        assert data["content_store"]["entries"] == 5
+        assert data["links"]["active"] == 1
 
-            resp = await client.get("/metrics")
-            assert resp.status == 200
-            text = await resp.text()
-            assert "icn_content_store_entries 5" in text
-            assert "icn_links_active 1" in text
+        resp = await client.get("/metrics")
+        assert resp.status == 200
+        text = await resp.text()
+        assert "icn_content_store_entries 5" in text
+        assert "icn_links_active 1" in text
 
 
 @pytest.mark.asyncio

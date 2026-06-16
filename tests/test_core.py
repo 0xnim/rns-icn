@@ -398,6 +398,26 @@ class TestForwarder:
         assert cached.content == b"hello"
 
     @pytest.mark.asyncio
+    async def test_receive_data_unsolicited_not_cached_by_default(self):
+        # No PIT entry → Data was not solicited → must not be cached (defeats a
+        # peer injecting unsolicited content into the Content Store).
+        fw = Forwarder()
+        name = Name(rns_addr(0x02), [b"unsolicited"])
+        await fw.receive_data(Data.new(name=name, content=b"x"), 7)
+        assert fw.cs.get(name) is None
+
+    @pytest.mark.asyncio
+    async def test_receive_data_unsolicited_cached_when_opted_in(self):
+        # Trusted push flows (propagation replication) opt in explicitly.
+        fw = Forwarder()
+        name = Name(rns_addr(0x02), [b"pushed"])
+        await fw.receive_data(
+            Data.new(name=name, content=b"y"), 7, cache_unsolicited=True
+        )
+        cached = fw.cs.get(name)
+        assert cached is not None and cached.content == b"y"
+
+    @pytest.mark.asyncio
     async def test_loop_detection(self):
         fw = Forwarder()
         name = Name(rns_addr(0x01), [b"test"])

@@ -112,7 +112,7 @@ async def server_main() -> int:
     return 0
 
 
-async def _install_peer_routes(server: "ICNServer", config) -> list[tuple[str, Name]]:
+async def _install_peer_routes(server: ICNServer, config) -> list[tuple[str, Name]]:
     """Connect to each known peer and install a FIB route for its content.
 
     ICN names are self-certifying: content under ``/<peer-identity-hash>/...``
@@ -235,7 +235,7 @@ def main() -> int:
             print("Usage: python -m rns_icn.cli [client|server|router] [args...]")
             return 1
         subcommand = sys.argv[1]
-        sys.argv = [sys.argv[0]] + sys.argv[2:]  # Remove subcommand
+        sys.argv = [sys.argv[0], *sys.argv[2:]]  # Remove subcommand
         if subcommand == "client":
             return asyncio.run(client_main())
         elif subcommand == "server":

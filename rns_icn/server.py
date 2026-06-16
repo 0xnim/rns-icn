@@ -14,7 +14,7 @@ import asyncio
 import enum
 import hashlib
 import time
-from typing import Callable, Optional
+from collections.abc import Callable
 
 from .aps import APSManager
 from .content_store import ContentStore
@@ -22,6 +22,7 @@ from .face import Face, FaceCapabilities, FaceId
 from .fib import Fib
 from .forwarder import Forwarder
 from .manifest import EntryKind, Manifest, ManifestEntry
+from .metrics import metrics
 from .name import Name
 from .offline_queue import OfflineQueue
 from .packet import APSubscribe, Data, Interest, Invalidate, parse_packet
@@ -38,7 +39,7 @@ class _ServerFace(Face):
         self._id = face_id
         self._send_q = send_q
 
-    async def express_interest(self, interest: Interest) -> Optional[Data]:
+    async def express_interest(self, interest: Interest) -> Data | None:
         # Server faces don't originate Interests (consumers do)
         # But if they do, forward it out
         await self._send_q.put(interest.to_bytes())
@@ -83,8 +84,8 @@ class ICNServer:
 
     def __init__(self, rns_identity: bytes, cs_max: int = 10000,
                  role: ServerRole = ServerRole.ORIGIN,
-                 signer: Optional[Callable[[bytes], bytes]] = None,
-                 invalidation_verifier: Optional[Callable[[Invalidate], bool]] = None):
+                 signer: Callable[[bytes], bytes] | None = None,
+                 invalidation_verifier: Callable[[Invalidate], bool] | None = None):
         """Args:
             rns_identity: 16-byte RNS address of this server
             role: ServerRole (ORIGIN, CACHE, or PROPAGATION)
@@ -126,7 +127,7 @@ class ICNServer:
         self.forwarder.register_face(face)
         return face
 
-    def _maybe_sign(self, data: Optional[Data]) -> Optional[Data]:
+    def _maybe_sign(self, data: Data | None) -> Data | None:
         """Sign Data we originate, in place.
 
         Only signs when a signer is configured, the Data is not already
@@ -143,7 +144,7 @@ class ICNServer:
             data.sign(self._signer)
         return data
 
-    def _serve_from_cs(self, interest: Interest, in_face_id: FaceId) -> Optional[Data]:
+    def _serve_from_cs(self, interest: Interest, in_face_id: FaceId) -> Data | None:
         """Check local ContentStore for matching data."""
         if interest.can_be_prefix:
             return self._maybe_sign(self.forwarder.cs.get_prefix(interest.name))
@@ -375,8 +376,10 @@ class ICNServer:
         """Handle a raw incoming packet from a Link."""
         try:
             pkt = parse_packet(raw)
-        except (ValueError, Exception):
-            # Silently drop invalid packets
+        except Exception:
+            # Drop unparseable packets, but count them — a nonzero malformed
+            # counter means a peer is sending garbage or a parser bug exists.
+            metrics.record_malformed_packet()
             return
 
         if pkt.interest is not None:
@@ -394,7 +397,7 @@ class ICNServer:
         elif pkt.peer is not None:
             await self.propagation.handle_peer_handshake(pkt.peer, face_id)
 
-    def get_face_send_queue(self, face_id: FaceId) -> Optional[asyncio.Queue]:
+    def get_face_send_queue(self, face_id: FaceId) -> asyncio.Queue | None:
         return self._face_send_queues.get(face_id)
 
     @property

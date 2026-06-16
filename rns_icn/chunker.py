@@ -7,8 +7,8 @@ its own blake2b content hash for independent integrity verification.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, Optional
 
 from .manifest import ChunkRef, ContentManifest
 from .name import Name
@@ -37,7 +37,7 @@ class ChunkResult:
     def chunk_count(self) -> int:
         return len(self.data_packets)
 
-    def data_for_label(self, label: str) -> Optional[Data]:
+    def data_for_label(self, label: str) -> Data | None:
         for dp in self.data_packets:
             if label in str(dp.name):
                 return dp
@@ -58,7 +58,7 @@ def chunk_content(
     name: Name,
     chunk_size: int = DEFAULT_CHUNK_SIZE,
     sequence: int = 1,
-    signer: Optional[Callable[[bytes], bytes]] = None,
+    signer: Callable[[bytes], bytes] | None = None,
 ) -> ChunkResult:
     """Split *content* into chunks and produce a ContentManifest + Data packets.
 
@@ -106,7 +106,7 @@ def chunk_content(
         # Each chunk gets its own Name: /<rns>/<path...>/<label>?hash=<chunk_hash>
         chunk_name = Name(
             name.rns_addr,
-            name.components[1:] + [label.encode("utf-8")],
+            [*name.components[1:], label.encode("utf-8")],
             content_hash=chunk_hash,
         )
         data = Data.new(name=chunk_name, content=chunk_bytes)

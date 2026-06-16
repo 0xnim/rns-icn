@@ -9,7 +9,7 @@ verifies the overall content hash.
 from __future__ import annotations
 
 import hashlib
-from typing import Callable, Optional
+from collections.abc import Callable
 
 from .manifest import ChunkRef, ContentManifest
 from .packet import Data
@@ -52,7 +52,7 @@ def _compute_blake2b(data: bytes) -> bytes:
 def assemble(
     manifest: ContentManifest,
     chunks: dict[str, Data],
-    validator: Optional[Validator] = None,
+    validator: Validator | None = None,
 ) -> bytes:
     """Reassemble original content from chunk Data packets.
 
@@ -110,7 +110,7 @@ def assemble(
 def assemble_verified(
     manifest: ContentManifest,
     chunks: dict[str, Data],
-    validator: Optional[Validator] = None,
+    validator: Validator | None = None,
 ) -> bytes:
     """Reassemble with ONLY chunk-level verification (no overall hash check).
 
@@ -153,7 +153,7 @@ def assemble_fast(
 def verify_chunk(
     ref: ChunkRef,
     data: Data,
-    validator: Optional[Validator] = None,
+    validator: Validator | None = None,
 ) -> bool:
     """Verify a single chunk Data against its ChunkRef.
 
@@ -168,15 +168,13 @@ def verify_chunk(
     actual = _compute_blake2b(data.content)
     if actual != ref.content_hash:
         return False
-    if validator is not None and not data.verify_signature(validator):
-        return False
-    return True
+    return not (validator is not None and not data.verify_signature(validator))
 
 
 def verify_chunks(
     manifest: ContentManifest,
     chunks: dict[str, Data],
-    validator: Optional[Validator] = None,
+    validator: Validator | None = None,
 ) -> dict[str, bool]:
     """Verify all chunks in a manifest against their Data packets.
 

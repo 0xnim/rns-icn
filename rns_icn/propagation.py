@@ -19,7 +19,7 @@ Flow:
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from .face import FaceId
 from .name import Name
@@ -51,7 +51,7 @@ class PropagationManager:
     which triggers a push of existing content.
     """
 
-    def __init__(self, server: Optional["ICNServer"] = None):
+    def __init__(self, server: ICNServer | None = None):
         self._server = server
         # peer_face -> peer's RNS address (16 bytes)
         self._peers: dict[FaceId, bytes] = {}
@@ -118,7 +118,7 @@ class PropagationManager:
 
     # ── Manifest fetching ──
 
-    async def fetch_peer_manifest(self, face_id: FaceId) -> Optional["Manifest"]:
+    async def fetch_peer_manifest(self, face_id: FaceId) -> Manifest | None:
         """Fetch and parse a peer's content manifest.
 
         First checks the local ContentStore (manifest may be cached from
@@ -155,7 +155,7 @@ class PropagationManager:
             logger.debug("failed to parse fetched peer manifest", exc_info=True)
             return None
 
-    async def fetch_downstream_manifests(self) -> dict[bytes, "Manifest"]:
+    async def fetch_downstream_manifests(self) -> dict[bytes, Manifest]:
         """Fetch manifests from all downstream peers.
 
         First checks the local ContentStore (manifest may have been cached
@@ -190,7 +190,7 @@ class PropagationManager:
                     )
         return results
 
-    async def fetch_peer_manifest_raw(self, face_id: FaceId) -> Optional[Data]:
+    async def fetch_peer_manifest_raw(self, face_id: FaceId) -> Data | None:
         """Fetch a peer's manifest Data directly via express Interest.
 
         Returns raw Data packet (not parsed Manifest), or None on failure.
@@ -270,7 +270,7 @@ class PropagationManager:
         )
         return subscribed
 
-    async def _manifest_fetch(self, face_id: FaceId, manifest_name: Name) -> Optional[Data]:
+    async def _manifest_fetch(self, face_id: FaceId, manifest_name: Name) -> Data | None:
         """Express an Interest for the peer's manifest and wait for Data."""
         if self._server is None:
             return None
@@ -302,7 +302,7 @@ class PropagationManager:
 
     # ── Content propagation ──
 
-    async def propagate(self, data: Data, exclude_face: Optional[FaceId] = None) -> int:
+    async def propagate(self, data: Data, exclude_face: FaceId | None = None) -> int:
         """Forward a Data packet to all peered servers.
 
         Called after publish_pushed() to replicate content across
@@ -373,8 +373,12 @@ class PropagationManager:
         if self._server is None:
             return
 
-        # Cache locally AND resolve any pending PIT entries
-        await self._server.forwarder.receive_data(data, in_face)
+        # Cache locally AND resolve any pending PIT entries. Propagation push is
+        # a trusted, authenticated peer flow, so unsolicited content is cached
+        # intentionally (unlike the default generic incoming-Data path).
+        await self._server.forwarder.receive_data(
+            data, in_face, cache_unsolicited=True
+        )
 
         # Propagate to other peers
         await self.propagate(data, exclude_face=in_face)

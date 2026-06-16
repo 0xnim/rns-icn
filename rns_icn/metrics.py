@@ -5,7 +5,6 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from threading import Lock
-from typing import Dict, Optional
 
 
 @dataclass
@@ -17,13 +16,17 @@ class MetricsCollector:
     _fetch_lock: Lock = field(default_factory=Lock)
 
     # Link uptime tracking
-    link_up_times: Dict[str, float] = field(default_factory=dict)  # peer_hash -> start_time
-    link_total_uptime: Dict[str, float] = field(default_factory=dict)  # peer_hash -> total seconds
+    link_up_times: dict[str, float] = field(default_factory=dict)  # peer_hash -> start_time
+    link_total_uptime: dict[str, float] = field(default_factory=dict)  # peer_hash -> total seconds
     _link_lock: Lock = field(default_factory=Lock)
 
     # Operation counters
     fetch_total: int = 0
     fetch_errors: int = 0
+    # Packets dropped because they failed to parse (malformed / truncated /
+    # unknown type). A nonzero value means a peer is sending garbage or a
+    # parser bug exists — surfaced rather than silently swallowed.
+    malformed_packets: int = 0
     _counter_lock: Lock = field(default_factory=Lock)
 
     def record_fetch(self, latency: float, success: bool = True) -> None:
@@ -36,6 +39,11 @@ class MetricsCollector:
             self.fetch_total += 1
             if not success:
                 self.fetch_errors += 1
+
+    def record_malformed_packet(self) -> None:
+        """Record a packet that could not be parsed (dropped)."""
+        with self._counter_lock:
+            self.malformed_packets += 1
 
     def record_link_up(self, peer_hash: str) -> None:
         """Record link establishment."""
@@ -54,7 +62,7 @@ class MetricsCollector:
                 )
                 del self.link_up_times[peer_hash]
 
-    def get_fetch_stats(self) -> Dict[str, float]:
+    def get_fetch_stats(self) -> dict[str, float]:
         """Get fetch latency statistics."""
         with self._fetch_lock:
             if not self.fetch_latencies:
@@ -69,7 +77,7 @@ class MetricsCollector:
                 "p99": sorted_lat[int(n * 0.99)],
             }
 
-    def get_link_uptime(self, peer_hash: str) -> Optional[float]:
+    def get_link_uptime(self, peer_hash: str) -> float | None:
         """Get current link uptime if link is up, else total uptime."""
         now = time.time()
         with self._link_lock:
@@ -77,7 +85,7 @@ class MetricsCollector:
                 return now - self.link_up_times[peer_hash]
             return self.link_total_uptime.get(peer_hash)
 
-    def get_link_stats(self) -> Dict[str, Dict[str, float]]:
+    def get_link_stats(self) -> dict[str, dict[str, float]]:
         """Get uptime stats for all known links."""
         now = time.time()
         with self._link_lock:
@@ -97,12 +105,13 @@ class MetricsCollector:
                     }
             return stats
 
-    def get_counters(self) -> Dict[str, int]:
+    def get_counters(self) -> dict[str, int]:
         """Get operation counters."""
         with self._counter_lock:
             return {
                 "fetch_total": self.fetch_total,
                 "fetch_errors": self.fetch_errors,
+                "malformed_packets": self.malformed_packets,
             }
 
     def reset(self) -> None:
@@ -115,6 +124,7 @@ class MetricsCollector:
         with self._counter_lock:
             self.fetch_total = 0
             self.fetch_errors = 0
+            self.malformed_packets = 0
 
 
 # Global metrics instance

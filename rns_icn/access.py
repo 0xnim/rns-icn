@@ -32,9 +32,9 @@ from __future__ import annotations
 import hashlib
 import struct
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, List, Optional
 
 import RNS
 from RNS.Cryptography import Token
@@ -131,7 +131,7 @@ class Capability:
     wrapped_cek: bytes     # CEK encrypted to the consumer's identity
     issued_at: int = 0
     expires_at: int = 0    # 0 = never expires
-    signature: Optional[bytes] = None
+    signature: bytes | None = None
 
     def __post_init__(self) -> None:
         if len(self.producer) != RNS_ADDR_BYTES:
@@ -154,7 +154,7 @@ class Capability:
         h.update(self.wrapped_cek)
         return h.digest()
 
-    def sign(self, signer: Callable[[bytes], bytes]) -> "Capability":
+    def sign(self, signer: Callable[[bytes], bytes]) -> Capability:
         """Sign with the producer's signer (typically ``identity.sign``)."""
         sig = signer(self.signed_hash())
         if len(sig) != SIGNATURE_BYTES:
@@ -170,12 +170,12 @@ class Capability:
             return False
         return validator(self.signature, self.signed_hash())
 
-    def is_expired(self, now: Optional[int] = None) -> bool:
+    def is_expired(self, now: int | None = None) -> bool:
         if self.expires_at == 0:
             return False
         return (now if now is not None else int(time.time())) > self.expires_at
 
-    def covers(self, name: Name, now: Optional[int] = None) -> bool:
+    def covers(self, name: Name, now: int | None = None) -> bool:
         """True if this capability is valid and grants ``name``."""
         return name.starts_with(self.prefix) and not self.is_expired(now)
 
@@ -190,10 +190,10 @@ class Capability:
         consumer: RNS.Identity,
         producer_identity: RNS.Identity,
         signer: Callable[[bytes], bytes],
-        producer_addr: Optional[bytes] = None,
+        producer_addr: bytes | None = None,
         ttl_seconds: int = 0,
-        now: Optional[int] = None,
-    ) -> "Capability":
+        now: int | None = None,
+    ) -> Capability:
         """Mint and sign a capability granting ``consumer`` access to ``prefix``.
 
         Derives the prefix CEK from ``producer_identity`` (the namespace owner),
@@ -231,7 +231,7 @@ class Capability:
         return bytes(buf)
 
     @classmethod
-    def from_bytes(cls, data: bytes) -> "Capability":
+    def from_bytes(cls, data: bytes) -> Capability:
         fixed = 2 * RNS_ADDR_BYTES + 16
         if len(data) < fixed + 2:
             raise AccessError("buffer too short for Capability")
@@ -304,15 +304,15 @@ class AccessController:
         self,
         producer_identity: RNS.Identity,
         producer_addr: bytes,
-        rules: Optional[List[AccessRule]] = None,
+        rules: list[AccessRule] | None = None,
     ):
         self.identity = producer_identity
         self.producer_addr = producer_addr
-        self.rules: List[AccessRule] = list(rules or [])
+        self.rules: list[AccessRule] = list(rules or [])
 
-    def matching_rule(self, name: Name) -> Optional[AccessRule]:
+    def matching_rule(self, name: Name) -> AccessRule | None:
         """Longest-prefix matching rule for ``name``, or None if public."""
-        best: Optional[AccessRule] = None
+        best: AccessRule | None = None
         for rule in self.rules:
             if name.starts_with(rule.prefix) and (
                 best is None or rule.prefix.len() > best.prefix.len()
@@ -341,7 +341,7 @@ class AccessController:
         consumer: RNS.Identity,
         signer: Callable[[bytes], bytes],
         ttl_seconds: int = 0,
-        now: Optional[int] = None,
+        now: int | None = None,
     ) -> Capability:
         """Mint a capability for ``consumer`` over ``prefix``.
 

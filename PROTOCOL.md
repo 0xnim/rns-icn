@@ -1,6 +1,6 @@
 # rns-icn Protocol Specification
 
-**Version:** 1 (as implemented in rns-icn 0.1.0)
+**Version:** 2 (as implemented in rns-icn 0.2.0)
 **Status:** Reference specification. This document is normative and is written to
 match the reference implementation in this repository. Where this document and
 the code disagree, that is a bug in one of them — please file an issue.
@@ -385,7 +385,8 @@ A producer signature authenticates a Data packet. The **signed hash** is:
 
 ```
 H_data = BLAKE2b32(
-    name.to_bytes()
+    b"icn-data\x01"                      (domain-separation tag)
+  || name.to_bytes()
   || content
   || content_hash                       (if present)
   || ( 0x01 || u64(sequence) )          (if sequence present)
@@ -412,10 +413,11 @@ Design notes (normative for interoperability):
   consumer trust `signed_at`/`sequence` for rollback detection
   ([§15.2](#152-rollback-protection)) and trust the `encrypted` flag
   ([§13](#13-access-control)).
-* `H_data` has **no leading domain-separation tag**. Data signatures are only
-  ever validated in the Data context, so there is no cross-protocol collision
-  with the domain-tagged objects below; implementers extending the protocol
-  SHOULD nonetheless be aware of this asymmetry.
+* `H_data` is prefixed with the domain tag `b"icn-data\x01"` so a Data signature
+  can never be replayed as another signed object (and vice versa). This tag was
+  added in protocol v2; v1 (rns-icn 0.1.x) signatures omitted it and therefore
+  **do not verify under v2**. Producers and consumers must run matching protocol
+  versions.
 
 A consumer verifies by recomputing `H_data` and checking the signature against
 an authorized producer key ([§10.4](#104-resolving-an-authorized-producer-key)).
@@ -424,17 +426,18 @@ an authorized producer key ([§10.4](#104-resolving-an-authorized-producer-key))
 
 | Object | Signed hash input | Signer |
 |--------|-------------------|--------|
-| Invalidate | `BLAKE2b32( name.to_bytes() \|\| u64(epoch) \|\| (0x01 if is_prefix else 0x00) )` | producer |
+| Invalidate | `BLAKE2b32( b"icn-invalidate\x01" \|\| name.to_bytes() \|\| u64(epoch) \|\| (0x01 if is_prefix else 0x00) )` | producer |
 | KeyRotation | [§11.1](#111-rotation-certificate) | previous key |
 | Revocation | [§12](#12-key-revocation) | anchor key |
 | Capability | [§13.3](#133-capability-token) | producer signing key |
 
-KeyRotation, Revocation, and Capability each prepend a distinct
-**domain-separation tag** so a signature over one can never be replayed as
-another:
+Every producer-signed object prepends a distinct **domain-separation tag** so a
+signature over one can never be replayed as another:
 
 | Object | Domain tag |
 |--------|-----------|
+| Data | `b"icn-data\x01"` |
+| Invalidate | `b"icn-invalidate\x01"` |
 | KeyRotation | `b"icn-key-rotation\x01"` |
 | Revocation | `b"icn-key-revocation\x01"` |
 | Capability | `b"icn-capability\x01"` |
@@ -693,13 +696,15 @@ failure against the out-face for future route selection.
 
 ### 14.4 Data processing
 
-Data received on a face is inserted into the Content Store, and if it matches a
-pending PIT entry it is additionally delivered to every aggregated downstream
-face and the PIT entry is satisfied. (The implementation caches incoming Data
-unconditionally — it does not gate insertion on a PIT match — so a forwarder MAY
-cache Data it did not solicit; integrity against poisoning rests entirely on
-consumer-side signature verification, which is therefore mandatory for any
-security guarantee.)
+Data received on a face that matches a pending PIT entry is delivered to every
+aggregated downstream face, cached in the Content Store, and the PIT entry is
+satisfied. Data that does **not** match a PIT entry (unsolicited) is **not
+cached by default** — the standard NDN rule, so an unauthenticated peer cannot
+inject content into the cache. Trusted push flows that legitimately deliver
+unsolicited content (propagation replication between peered servers) opt in
+explicitly. Integrity against poisoning ultimately rests on consumer-side
+signature verification, which is mandatory for any security guarantee; the PIT
+gate narrows the surface a forwarder exposes.
 
 A forwarder does **not** verify producer signatures (that is the consumer's
 responsibility) and **MUST NOT** re-sign relayed Data — it relays the producer's
@@ -916,9 +921,7 @@ drive an allocation before it is validated.
 
 **Residual risks / non-goals.** This version does not provide consumer anonymity
 (an observer of a face sees the names requested, modulo RNS path encryption),
-traffic-analysis resistance, or protection against a compromised anchor key. The
-Data signature envelope lacks a leading domain-separation tag
-([§10.2](#102-data-signature-envelope)).
+traffic-analysis resistance, or protection against a compromised anchor key.
 
 ---
 
@@ -943,5 +946,5 @@ Data signature envelope lacks a leading domain-separation tag
 **Packet types:** `0x01` Interest, `0x02` Data, `0x03` APS Subscribe,
 `0x04` Propagation Peer, `0x05` Capability Peer, `0x06` Invalidate.
 
-**Domain tags:** `icn-key-rotation\x01`, `icn-key-revocation\x01`,
-`icn-capability\x01`, `icn-content-key\x01`.
+**Domain tags:** `icn-data\x01`, `icn-invalidate\x01`, `icn-key-rotation\x01`,
+`icn-key-revocation\x01`, `icn-capability\x01`, `icn-content-key\x01`.

@@ -5,7 +5,6 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional
 
 from .face import FaceId
 from .name import Name
@@ -16,7 +15,7 @@ from .packet import Interest
 class PitEntry:
     interest: Interest
     in_faces: list[FaceId] = field(default_factory=list)
-    out_face: Optional[FaceId] = None
+    out_face: FaceId | None = None
     expires_at: float = 0.0
     satisfied: bool = False
 
@@ -32,7 +31,7 @@ class Pit:
         self._nonce_tracker: dict[tuple[FaceId, bytes], float] = {}
         self._nonce_ttl = nonce_ttl
 
-    def find(self, name: Name) -> Optional[PitEntry]:
+    def find(self, name: Name) -> PitEntry | None:
         return self._entries.get(name)
 
     def insert_or_aggregate(self, name: Name, in_face: FaceId,
@@ -54,7 +53,7 @@ class Pit:
         if entry is not None:
             entry.out_face = out_face
 
-    def satisfy(self, name: Name) -> Optional[list[FaceId]]:
+    def satisfy(self, name: Name) -> list[FaceId] | None:
         entry = self._entries.get(name)
         if entry is not None:
             entry.satisfied = True

@@ -64,7 +64,7 @@ async def _fetch(peer_hash: str, name_str: str, output_path: str):
     # Wait for a path to the peer (request + poll) so its identity can be
     # recalled and a Link established.
     print("[fetch] Waiting for path to peer...", file=sys.stderr)
-    for attempt in range(24):  # up to 2 minutes
+    for _attempt in range(24):  # up to 2 minutes
         if RNS.Transport.has_path(peer_addr_raw):
             hops = RNS.Transport.hops_to(peer_addr_raw)
             print(f"[fetch] Path found! hops={hops}", file=sys.stderr)
@@ -138,7 +138,7 @@ async def _fetch(peer_hash: str, name_str: str, output_path: str):
         try:
             with open(output_path, "wb") as f:
                 f.write(content)
-        except IOError as e:
+        except OSError as e:
             print(f"[fetch] ERROR: Cannot write to {output_path}: {e}", file=sys.stderr)
             await server.shutdown()
             sys.exit(1)

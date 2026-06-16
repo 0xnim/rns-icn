@@ -12,7 +12,6 @@ import json
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional
 
 from .name import RNS_ADDR_BYTES, Name
 from .packet import Data
@@ -36,7 +35,7 @@ class ChunkRef:
     label: str                                    # e.g. "part_000", "chunk_42"
     content_hash: bytes                           # 32-byte blake2b
     size: int                                     # chunk byte size
-    sequence: Optional[int] = None                # explicit ordering (ties into stream seq nums)
+    sequence: int | None = None                # explicit ordering (ties into stream seq nums)
 
     def to_dict(self) -> dict:
         d = {
@@ -72,7 +71,7 @@ class ContentManifest:
     name: Name                                    # canonical name of the overall content
     chunks: list[ChunkRef]                        # ordered chunk references
     total_size: int                               # sum of chunk sizes
-    content_hash: Optional[bytes] = None          # blake2b of full content (32 bytes)
+    content_hash: bytes | None = None          # blake2b of full content (32 bytes)
     sequence: int = 1                             # monotonic version
     timestamp: int = 0                            # unix seconds (set by factory)
 
@@ -114,7 +113,7 @@ class ContentManifest:
     def chunk_count(self) -> int:
         return len(self.chunks)
 
-    def find_chunk_by_label(self, label: str) -> Optional[ChunkRef]:
+    def find_chunk_by_label(self, label: str) -> ChunkRef | None:
         for c in self.chunks:
             if c.label == label:
                 return c
@@ -126,7 +125,7 @@ class ContentManifest:
 
     @classmethod
     def create(cls, name: Name, chunks: list[ChunkRef],
-               content_hash: Optional[bytes] = None,
+               content_hash: bytes | None = None,
                sequence: int = 1) -> ContentManifest:
         total_size = sum(c.size for c in chunks)
         return cls(
@@ -150,13 +149,13 @@ class ManifestEntry:
     kind: EntryKind
     label: str
     name: Name
-    content_hash: Optional[bytes] = None
-    size: Optional[int] = None
+    content_hash: bytes | None = None
+    size: int | None = None
     # Stream metadata (for STREAM entries)
-    latest_sequence: Optional[int] = None
-    total_items: Optional[int] = None
-    start_time: Optional[int] = None   # Unix timestamp of first item
-    end_time: Optional[int] = None     # Unix timestamp of last item
+    latest_sequence: int | None = None
+    total_items: int | None = None
+    start_time: int | None = None   # Unix timestamp of first item
+    end_time: int | None = None     # Unix timestamp of last item
 
     def to_dict(self) -> dict:
         d: dict[str, object] = {"kind": self.kind.value, "label": self.label, "name": str(self.name)}
@@ -195,7 +194,7 @@ class Manifest:
     sequence: int
     timestamp: int
     entries: list[ManifestEntry] = field(default_factory=list)
-    previous: Optional[Name] = None
+    previous: Name | None = None
 
     def manifest_name(self) -> Name:
         return Name(self.producer, [b"manifest"])
@@ -229,7 +228,7 @@ class Manifest:
     def to_json(self) -> bytes:
         return json.dumps(self.to_dict(), separators=(",", ":")).encode("utf-8")
 
-    def find(self, label: str) -> Optional[ManifestEntry]:
+    def find(self, label: str) -> ManifestEntry | None:
         for e in self.entries:
             if e.label == label:
                 return e
@@ -240,7 +239,7 @@ class Manifest:
 
     @classmethod
     def create(cls, producer: bytes, entries: list[ManifestEntry],
-               sequence: int = 1, previous: Optional[Name] = None) -> Manifest:
+               sequence: int = 1, previous: Name | None = None) -> Manifest:
         return cls(
             producer=producer,
             sequence=sequence,
@@ -270,12 +269,11 @@ def flatten_content_directory(manifest: Manifest) -> list[ManifestEntry]:
     directory: list[ManifestEntry] = []
     seen_labels: set[str] = set()
     for entry in manifest.entries:
-        if entry.kind != EntryKind.MANIFEST:
-            # Deduplicate by label (the prefixed label like "peer:aa.../sensor")
-            # so the same content doesn't appear twice from multiple paths
-            if entry.label not in seen_labels:
-                seen_labels.add(entry.label)
-                directory.append(entry)
+        # Skip MANIFEST references; deduplicate the rest by label (the prefixed
+        # label like "peer:aa.../sensor") so content doesn't appear twice.
+        if entry.kind != EntryKind.MANIFEST and entry.label not in seen_labels:
+            seen_labels.add(entry.label)
+            directory.append(entry)
     return directory
 
 

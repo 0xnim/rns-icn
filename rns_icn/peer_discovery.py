@@ -20,8 +20,9 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Callable, Optional
+from typing import TYPE_CHECKING
 
 import RNS
 
@@ -73,9 +74,9 @@ class PeerInfo:
     first_seen: float = 0.0
     last_seen: float = 0.0
     # Current link state
-    face_id: Optional[FaceId] = None
+    face_id: FaceId | None = None
     # Capabilities (set after CapPeer exchange on link)
-    capabilities: Optional[CapPeer] = None
+    capabilities: CapPeer | None = None
 
     @property
     def is_connected(self) -> bool:
@@ -101,9 +102,9 @@ class PeerDiscoveryManager:
         pdm.stop()
     """
 
-    def __init__(self, server: Optional["RNSICNServer"] = None):
+    def __init__(self, server: RNSICNServer | None = None):
         self._server = server
-        self._handler_id: Optional[_AnnounceHandler] = None
+        self._handler_id: _AnnounceHandler | None = None
         self._peers: dict[str, PeerInfo] = {}
         self._callbacks: list[DiscoveryCallback] = []
         self._app_name: str = ""
@@ -161,7 +162,7 @@ class PeerDiscoveryManager:
 
     # ── Peer registry ──
 
-    def get_peer(self, peer_hash: str) -> Optional[PeerInfo]:
+    def get_peer(self, peer_hash: str) -> PeerInfo | None:
         """Look up a peer by its RNS destination hex hash."""
         return self._peers.get(peer_hash)
 
@@ -192,7 +193,7 @@ class PeerDiscoveryManager:
         if info is not None:
             info.face_id = face_id
 
-    def peer_hash_for_face(self, face_id: FaceId) -> Optional[str]:
+    def peer_hash_for_face(self, face_id: FaceId) -> str | None:
         """Resolve a face ID back to the peer's hex hash.
 
         Search is O(n) — peers are usually few (<100).
@@ -256,7 +257,7 @@ class PeerDiscoveryManager:
 
     # ── Auto-connect helper ──
 
-    async def auto_connect(self, peer_hash: str) -> Optional[FaceId]:
+    async def auto_connect(self, peer_hash: str) -> FaceId | None:
         """Establish an outbound link to a discovered peer.
 
         Connects to the peer via the server's connect() method, then

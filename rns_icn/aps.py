@@ -18,7 +18,7 @@ Usage:
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from .face import FaceId
 from .name import Name
@@ -38,7 +38,7 @@ class APSManager:
     faces subscribed to that stream (or any prefix of it).
     """
 
-    def __init__(self, server: Optional["ICNServer"] = None):
+    def __init__(self, server: ICNServer | None = None):
         self._server = server
         self._subscriptions: dict[Name, set[FaceId]] = {}
 
