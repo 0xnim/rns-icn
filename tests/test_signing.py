@@ -178,3 +178,111 @@ def test_policy_unknown_key_rejected_when_strict(not_recallable, identity):
 def test_policy_unknown_key_accepted_when_not_strict(not_recallable, identity):
     ok, err = _client(require_signature=False)._check_signature(_signed(identity))
     assert ok and err is None
+
+
+# ── Per-chunk signatures (Phase 3.2: resource_transport / streamed files) ──
+
+from rns_icn.assembler import (  # noqa: E402
+    HashMismatchError,
+    SignatureError,
+    assemble,
+    assemble_verified,
+    verify_chunks,
+)
+from rns_icn.chunker import chunk_content  # noqa: E402
+
+
+def _big_name() -> Name:
+    return Name(rns_addr(0x42), [b"large.bin"])
+
+
+def test_chunk_content_unsigned_by_default():
+    """Without a signer, chunk Data packets carry no signature (back-compat)."""
+    result = chunk_content(b"x" * 5000, _big_name(), chunk_size=1000)
+    assert result.chunk_count() == 5
+    assert all(dp.signature is None for dp in result.data_packets)
+
+
+def test_chunk_content_signs_every_chunk(identity):
+    """A signer signs each chunk with a verifiable producer signature."""
+    result = chunk_content(b"y" * 5000, _big_name(), chunk_size=1000, signer=identity.sign)
+    assert result.chunk_count() == 5
+    for dp in result.data_packets:
+        assert dp.signature is not None
+        assert len(dp.signature) == SIGNATURE_BYTES
+        assert dp.verify_signature(identity.validate)
+
+
+def test_signed_chunks_survive_serialization(identity):
+    """Chunk signatures round-trip through the wire format, so caches re-serve
+    verifiable chunks."""
+    result = chunk_content(b"z" * 3000, _big_name(), chunk_size=1000, signer=identity.sign)
+    for dp in result.data_packets:
+        parsed = Data.from_bytes(dp.to_bytes())
+        assert parsed.signature == dp.signature
+        assert parsed.verify_signature(identity.validate)
+
+
+def test_assemble_with_validator_accepts_signed_chunks(identity):
+    """assemble() with a validator reassembles signed content end-to-end."""
+    content = b"streamed large file payload" * 100
+    result = chunk_content(content, _big_name(), chunk_size=256, signer=identity.sign)
+    chunks = {ref.label: dp for ref, dp in zip(result.manifest.chunks, result.data_packets)}
+    assert assemble(result.manifest, chunks, validator=identity.validate) == content
+
+
+def test_assemble_rejects_unsigned_chunks_when_validator_given(identity):
+    """A validator requires every chunk to be signed — unsigned streams fail."""
+    result = chunk_content(b"a" * 3000, _big_name(), chunk_size=1000)  # no signer
+    chunks = {ref.label: dp for ref, dp in zip(result.manifest.chunks, result.data_packets)}
+    with pytest.raises(SignatureError, match="unsigned"):
+        assemble(result.manifest, chunks, validator=identity.validate)
+
+
+def test_assemble_rejects_chunk_signed_by_wrong_key(identity):
+    """A chunk signed by a different identity (relay substitution) is rejected."""
+    result = chunk_content(b"b" * 3000, _big_name(), chunk_size=1000, signer=identity.sign)
+    chunks = {ref.label: dp for ref, dp in zip(result.manifest.chunks, result.data_packets)}
+    attacker = RNS.Identity()
+    with pytest.raises(SignatureError, match="failed verification"):
+        assemble(result.manifest, chunks, validator=attacker.validate)
+
+
+def test_assemble_detects_substituted_chunk_payload(identity):
+    """Swapping a chunk's content for a same-length forgery is caught — by the
+    content hash first, and by the signature if hashes were also forged."""
+    content = b"c" * 3000
+    result = chunk_content(content, _big_name(), chunk_size=1000, signer=identity.sign)
+    chunks = {ref.label: dp for ref, dp in zip(result.manifest.chunks, result.data_packets)}
+    # Forge a middle chunk's payload but keep its (now-stale) signature.
+    victim = chunks["chunk_0001"]
+    victim.content = b"X" * 1000
+    with pytest.raises((HashMismatchError, SignatureError)):
+        assemble(result.manifest, chunks, validator=identity.validate)
+
+
+def test_assemble_without_validator_ignores_signatures(identity):
+    """Back-compat: omitting the validator skips signature checks entirely."""
+    content = b"d" * 2000
+    result = chunk_content(content, _big_name(), chunk_size=1000)  # unsigned
+    chunks = {ref.label: dp for ref, dp in zip(result.manifest.chunks, result.data_packets)}
+    assert assemble(result.manifest, chunks) == content
+
+
+def test_assemble_verified_honours_validator(identity):
+    """assemble_verified() (no overall-hash check) also enforces signatures."""
+    result = chunk_content(b"e" * 2500, _big_name(), chunk_size=1000, signer=identity.sign)
+    chunks = {ref.label: dp for ref, dp in zip(result.manifest.chunks, result.data_packets)}
+    out = assemble_verified(result.manifest, chunks, validator=identity.validate)
+    assert out == b"e" * 2500
+
+
+def test_verify_chunks_reports_signature_state(identity):
+    """verify_chunks() with a validator flags unsigned/forged chunks per label."""
+    result = chunk_content(b"f" * 3000, _big_name(), chunk_size=1000, signer=identity.sign)
+    chunks = {ref.label: dp for ref, dp in zip(result.manifest.chunks, result.data_packets)}
+    assert all(verify_chunks(result.manifest, chunks, validator=identity.validate).values())
+
+    attacker = RNS.Identity()
+    results = verify_chunks(result.manifest, chunks, validator=attacker.validate)
+    assert not any(results.values())

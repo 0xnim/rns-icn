@@ -28,6 +28,7 @@ from .assembler import (
     HashMismatchError,
     IntegrityError,
     MissingChunkError,
+    SignatureError,
     assemble,
     assemble_fast,
     assemble_verified,
@@ -134,6 +135,7 @@ __all__ = [
     "chunk_content", "DEFAULT_CHUNK_SIZE",
     # Assembler
     "AssemblyError", "MissingChunkError", "HashMismatchError", "IntegrityError",
+    "SignatureError",
     "assemble", "assemble_verified", "assemble_fast",
     "verify_chunk", "verify_chunks", "missing_labels",
 ]

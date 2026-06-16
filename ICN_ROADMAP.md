@@ -97,7 +97,7 @@ Phases 1 and 2 are complete; parts of Phase 4 (capability negotiation, pub/sub, 
 ### 3.2 Signed Data Packets
 - [x] Per-packet signature (`Data.sign`/`verify_signature`, 64-byte Ed25519; persisted in CS so caches re-serve verifiable Data)
 - [x] Manifest references signed content hashes (entries carry `content_hash`; Data binds name↔content↔hash)
-- [ ] Per-chunk signatures for `resource_transport` (selective verification of streamed large files)
+- [x] Per-chunk signatures for `resource_transport` (selective verification of streamed large files): `chunk_content(..., signer=)` signs each chunk Data with the producer key; `assemble`/`assemble_verified`/`verify_chunk(s)` take an optional `validator` and raise `SignatureError` on missing/forged chunk signatures — defends streamed files against chunk substitution by a relay/cache
 
 ### 3.3 Access Control
 - [ ] Encrypted content (optional per-packet)

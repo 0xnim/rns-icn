@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, Optional
 
 from .manifest import ChunkRef, ContentManifest
 from .name import Name
@@ -58,6 +58,7 @@ def chunk_content(
     name: Name,
     chunk_size: int = DEFAULT_CHUNK_SIZE,
     sequence: int = 1,
+    signer: Optional[Callable[[bytes], bytes]] = None,
 ) -> ChunkResult:
     """Split *content* into chunks and produce a ContentManifest + Data packets.
 
@@ -67,6 +68,13 @@ def chunk_content(
             for each chunk's Name).
         chunk_size: Maximum bytes per chunk (default 64 KB).
         sequence: Monotonic version for the ContentManifest.
+        signer: Optional producer signer (typically ``RNS.Identity.sign``).
+            When provided, each chunk Data packet is signed so that streamed
+            large files are per-chunk verifiable end-to-end — a relay or cache
+            cannot substitute chunks without breaking the producer signature.
+            Uses the same per-packet Ed25519 scheme as single-fetch Data
+            (`Data.sign`), so signatures persist in the content store and
+            caches re-serve verifiable chunks.
 
     Returns:
         ChunkResult with manifest and one Data packet per chunk.
@@ -103,6 +111,8 @@ def chunk_content(
         )
         data = Data.new(name=chunk_name, content=chunk_bytes)
         data.with_sequence(idx)
+        if signer is not None:
+            data.sign(signer)
         data_packets.append(data)
 
         offset += chunk_size
