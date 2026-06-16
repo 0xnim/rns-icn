@@ -7,6 +7,7 @@ and incoming Data (producer/relay-facing).
 from __future__ import annotations
 
 import asyncio
+import os
 from collections.abc import AsyncIterator
 from typing import Optional
 
@@ -27,6 +28,9 @@ class Forwarder:
         self.strategy = strategy or BestRoute()
         self._faces: dict[FaceId, Face] = {}
         self._pit_notifiers: dict[Name, list[asyncio.Future]] = {}
+        # Names with an in-flight stale-while-revalidate refresh, so we never
+        # fire more than one background revalidation per name at a time.
+        self._revalidating: set[Name] = set()
 
     @property
     def faces(self) -> dict[FaceId, Face]:
@@ -65,6 +69,13 @@ class Forwarder:
         )
 
         if decision == StrategyDecision.SERVE_FROM_CACHE:
+            return cs_hit
+
+        if decision == StrategyDecision.SERVE_STALE_REVALIDATE:
+            # Serve the stale copy immediately; refresh it upstream in the
+            # background so the next request gets fresh content.
+            if target_face is not None:
+                self._schedule_revalidation(interest, in_face, target_face)
             return cs_hit
 
         if decision == StrategyDecision.SUPPRESS_AGGREGATE:
@@ -133,6 +144,33 @@ class Forwarder:
         self.pit.satisfy(name)
         self.pit.purge_expired()
         return None
+
+    def _schedule_revalidation(self, interest: Interest, in_face: FaceId,
+                               out_face_id: FaceId) -> None:
+        """Fire a one-shot background refresh for a stale-served name.
+
+        Deduped per name so concurrent stale hits trigger at most one upstream
+        revalidation. The refreshed Data is cached by ``_forward`` when it
+        arrives; we ignore the return value here.
+        """
+        name = interest.name
+        if name in self._revalidating:
+            return
+        self._revalidating.add(name)
+
+        revalidate = interest.clone()
+        revalidate.nonce = os.urandom(8)
+        revalidate.must_be_fresh = True
+
+        async def _run() -> None:
+            try:
+                await self._forward(revalidate, in_face, out_face_id)
+            except Exception:
+                pass
+            finally:
+                self._revalidating.discard(name)
+
+        asyncio.ensure_future(_run())
 
     def _notify_waiters(self, name: Name, data: Optional[Data]) -> None:
         notifiers = self._pit_notifiers.pop(name, [])

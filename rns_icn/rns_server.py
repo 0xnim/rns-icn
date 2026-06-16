@@ -36,6 +36,7 @@ from .packet import (
     FEATURE_PROPAGATION,
     CapPeer,
     Data,
+    Invalidate,
 )
 from .peer_discovery import PeerDiscoveryManager
 from .resource_transport import (
@@ -45,6 +46,21 @@ from .resource_transport import (
 )
 from .rns_utils import load_or_create_identity
 from .server import ICNServer as BaseICNServer
+
+
+def _verify_invalidation(inv: Invalidate) -> bool:
+    """Verify an Invalidate against the producer recalled from its name.
+
+    Self-certifying: the producer address embedded in the name is the identity
+    whose key must have signed the invalidation. Returns False when unsigned or
+    when the producer key can't be recalled.
+    """
+    if inv.signature is None:
+        return False
+    identity = RNS.Identity.recall(inv.name.rns_addr, from_identity_hash=True)
+    if identity is None:
+        return False
+    return inv.verify_signature(identity.validate)
 
 
 class ICNServer(BaseICNServer):
@@ -78,6 +94,7 @@ class ICNServer(BaseICNServer):
             cs_max=config.cs_max_entries,
             role=config.role,
             signer=self.identity.sign,
+            invalidation_verifier=_verify_invalidation,
         )
 
         # Replace in-memory ContentStore with SQLite-backed persistent store
@@ -88,6 +105,13 @@ class ICNServer(BaseICNServer):
             default_ttl=config.cs_ttl_seconds,
             prefix_ttls=config.cs_prefix_ttls,
         )
+
+        # Enable stale-while-revalidate on the forwarding strategy when configured.
+        from .strategy import BestRoute
+        if isinstance(self.forwarder.strategy, BestRoute):
+            self.forwarder.strategy = BestRoute(
+                stale_while_revalidate=config.cs_stale_while_revalidate,
+            )
 
         # Destination created in start()
         self.destination: Optional[RNS.Destination] = None

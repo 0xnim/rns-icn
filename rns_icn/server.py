@@ -24,7 +24,7 @@ from .forwarder import Forwarder
 from .manifest import EntryKind, Manifest, ManifestEntry
 from .name import Name
 from .offline_queue import OfflineQueue
-from .packet import APSubscribe, Data, Interest, parse_packet
+from .packet import APSubscribe, Data, Interest, Invalidate, parse_packet
 from .pit import Pit
 from .propagation import PropagationManager
 
@@ -83,17 +83,23 @@ class ICNServer:
 
     def __init__(self, rns_identity: bytes, cs_max: int = 10000,
                  role: ServerRole = ServerRole.ORIGIN,
-                 signer: Optional[Callable[[bytes], bytes]] = None):
+                 signer: Optional[Callable[[bytes], bytes]] = None,
+                 invalidation_verifier: Optional[Callable[[Invalidate], bool]] = None):
         """Args:
             rns_identity: 16-byte RNS address of this server
             role: ServerRole (ORIGIN, CACHE, or PROPAGATION)
             signer: optional callable (typically RNS.Identity.sign) used to
                 sign Data this server originates. Only Data whose producer
                 address equals our own rns_addr is signed.
+            invalidation_verifier: optional callable that returns True iff an
+                Invalidate's signature checks out against the producer recalled
+                from its name. Caches without one cannot trust (and so drop)
+                incoming invalidations.
         """
         self.role = role
         self.rns_addr = rns_identity
         self._signer = signer
+        self._invalidation_verifier = invalidation_verifier
         self.forwarder = Forwarder(cs_max=cs_max)
         self.offline_queue = OfflineQueue(self, max_age_seconds=86400)
         self.aps = APSManager(self)
@@ -101,6 +107,8 @@ class ICNServer:
         self._next_face_id: FaceId = 100
         self._faces: dict[FaceId, Face] = {}
         self._face_send_queues: dict[FaceId, asyncio.Queue] = {}
+        # name_hash → highest invalidation epoch applied, for replay/loop drop.
+        self._seen_invalidations: dict[bytes, int] = {}
 
     def _icn_app_data(self) -> bytes:
         """Build announce app_data with server role encoded."""
@@ -276,6 +284,53 @@ class ICNServer:
         """Process an incoming Data packet."""
         await self.forwarder.receive_data(data, face_id)
 
+    def _invalidation_is_fresh(self, inv: Invalidate) -> bool:
+        """Replay/loop guard: True only for a not-yet-seen, newer epoch."""
+        key = hashlib.blake2b(inv.name.to_bytes(), digest_size=32).digest()
+        seen = self._seen_invalidations.get(key)
+        if seen is not None and inv.epoch <= seen:
+            return False
+        self._seen_invalidations[key] = inv.epoch
+        return True
+
+    async def handle_invalidate(self, inv: Invalidate, face_id: FaceId) -> None:
+        """Apply a producer-signed cache purge, then forward it one hop.
+
+        The signature is verified against the producer recalled from the name
+        (self-certifying: only the producer can invalidate names beneath its own
+        address). Unverifiable, unsigned, or replayed invalidations are dropped.
+        """
+        if self._invalidation_verifier is None or not self._invalidation_verifier(inv):
+            return
+        if not self._invalidation_is_fresh(inv):
+            return
+
+        self.forwarder.cs.invalidate(inv.name, prefix=inv.is_prefix)
+
+        # Forward to every other connected face (1-hop propagation).
+        raw = inv.to_bytes()
+        for fid, face in list(self._faces.items()):
+            if fid == face_id:
+                continue
+            await face.send_raw(raw)
+
+    async def invalidate(self, name: Name, prefix: bool = False) -> Invalidate:
+        """Originate a signed cache invalidation for one of our own names.
+
+        Signs with this server's key, drops it from the local store, and pushes
+        it to all connected faces. Requires a configured signer.
+        """
+        if self._signer is None:
+            raise RuntimeError("cannot invalidate without a signer configured")
+        inv = Invalidate(name=name, epoch=int(time.time()), is_prefix=prefix)
+        inv.sign(self._signer)
+        self._invalidation_is_fresh(inv)
+        self.forwarder.cs.invalidate(name, prefix=prefix)
+        raw = inv.to_bytes()
+        for face in list(self._faces.values()):
+            await face.send_raw(raw)
+        return inv
+
     async def handle_subscribe(self, sub: APSubscribe, face_id: FaceId) -> None:
         """Process an incoming APS Subscribe request.
 
@@ -334,6 +389,8 @@ class ICNServer:
                 await self.handle_data(pkt.data, face_id)
         elif pkt.subscribe is not None:
             await self.handle_subscribe(pkt.subscribe, face_id)
+        elif pkt.invalidate is not None:
+            await self.handle_invalidate(pkt.invalidate, face_id)
         elif pkt.peer is not None:
             await self.propagation.handle_peer_handshake(pkt.peer, face_id)
 

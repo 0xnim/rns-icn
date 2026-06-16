@@ -70,6 +70,10 @@ class ServerConfig:
     cs_ttl_seconds: Optional[int] = None
     cs_path: str = "~/.icn/content_store.db"
     cs_prefix_ttls: Dict[str, int] = field(default_factory=dict)
+    # Seconds past a Data's freshness_period during which a stale cache hit is
+    # served immediately while a background revalidation refreshes it. 0
+    # disables stale-while-revalidate (caches forward on staleness instead).
+    cs_stale_while_revalidate: int = 0
     resource_threshold: int = 100_000
     known_peers: List[KnownPeer] = field(default_factory=list)
     log_level: str = "INFO"
@@ -180,6 +184,7 @@ def _dict_to_server_config(data: Dict[str, Any], base_path: str) -> ServerConfig
         cs_ttl_seconds=data.get("cs_ttl_seconds"),
         cs_path=str((base_dir / data.get("cs_path", "~/.icn/content_store.db")).expanduser()),
         cs_prefix_ttls=data.get("cs_prefix_ttls", {}),
+        cs_stale_while_revalidate=data.get("cs_stale_while_revalidate", 0),
         resource_threshold=data.get("resource_threshold", 100_000),
         known_peers=known_peers,
         log_level=data.get("log_level", "INFO"),

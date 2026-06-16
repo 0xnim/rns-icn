@@ -64,6 +64,7 @@ class PacketType(IntEnum):
     APS_SUBSCRIBE = 0x03
     PROP_PEER = 0x04
     CAP_PEER = 0x05  # Peer capability exchange on link
+    INVALIDATE = 0x06  # Producer-signed cache purge for a name/prefix
 
 
 # ── InterestSelector ──
@@ -252,6 +253,10 @@ class DataMetadata:
     content_hash: Optional[bytes] = None
     sequence: Optional[int] = None
     freshness: Freshness = field(default_factory=Freshness)
+    # Declared freshness lifetime in seconds. A cache treats the Data as fresh
+    # until it has been held longer than this, then stale. None = no declared
+    # lifetime (caches consider it fresh until TTL eviction — legacy behaviour).
+    freshness_period: Optional[int] = None
 
     def to_bytes(self) -> bytes:
         flags = 0
@@ -261,6 +266,8 @@ class DataMetadata:
             flags |= 0x02
         if not self.freshness.fresh:
             flags |= 0x04
+        if self.freshness_period is not None:
+            flags |= 0x08
         buf = bytearray([flags])
         if self.content_hash is not None:
             buf.extend(self.content_hash)
@@ -268,6 +275,8 @@ class DataMetadata:
             buf.extend(struct.pack(">Q", self.sequence))
         if not self.freshness.fresh:
             buf.extend(struct.pack(">Q", self.freshness.age_seconds))
+        if self.freshness_period is not None:
+            buf.extend(struct.pack(">Q", self.freshness_period))
         return bytes(buf)
 
     @classmethod
@@ -294,7 +303,14 @@ class DataMetadata:
                 raise DataError("buffer too short for staleness")
             age = struct.unpack(">Q", data[pos:pos + 8])[0]
             freshness = Freshness(fresh=False, age_seconds=age)
-        return cls(content_hash=content_hash, sequence=sequence, freshness=freshness)
+        freshness_period = None
+        if flags & 0x08:
+            if pos + 8 > len(data):
+                raise DataError("buffer too short for freshness_period")
+            freshness_period = struct.unpack(">Q", data[pos:pos + 8])[0]
+            pos += 8
+        return cls(content_hash=content_hash, sequence=sequence,
+                   freshness=freshness, freshness_period=freshness_period)
 
 
 # ── Data ──
@@ -329,6 +345,11 @@ class Data:
 
     def with_staleness(self, age_seconds: int) -> Data:
         self.metadata.freshness = Freshness(fresh=False, age_seconds=age_seconds)
+        return self
+
+    def with_freshness_period(self, seconds: int) -> Data:
+        """Declare how long this Data stays fresh in a cache (seconds)."""
+        self.metadata.freshness_period = seconds
         return self
 
     def verify_content_hash(self) -> bool:
@@ -373,7 +394,10 @@ class Data:
 
     def to_bytes(self) -> bytes:
         name_bytes = self.name.to_bytes()
-        has_meta = self.metadata.content_hash is not None or self.metadata.sequence is not None or not self.metadata.freshness.fresh
+        has_meta = (self.metadata.content_hash is not None
+                    or self.metadata.sequence is not None
+                    or not self.metadata.freshness.fresh
+                    or self.metadata.freshness_period is not None)
         has_sig = self.signature is not None
 
         metadata_bytes = self.metadata.to_bytes() if has_meta else b""
@@ -601,6 +625,102 @@ FEATURE_MANIFEST = 0x00000008
 FEATURE_CHUNKED = 0x00000010
 
 
+# ── Invalidate ──
+
+
+class InvalidateError(Exception):
+    ...
+
+
+@dataclass
+class Invalidate:
+    """A producer-signed cache-purge control packet.
+
+    Wire: [type:1=0x06][name_len:varint][name...][epoch:8][flags:1]
+          [sig:64 if flags bit1]
+      flags bit 0: is_prefix  → purge every name under ``name``
+      flags bit 1: has_signature
+
+    The signature is over ``signed_hash()`` and is verified against the
+    producer's RNS identity recalled from ``name.rns_addr`` — self-certifying,
+    so only the producer can invalidate names beneath its own address. ``epoch``
+    is a producer-chosen monotonic value (e.g. unix time) used by relays to
+    drop replayed/stale invalidations.
+    """
+    name: Name
+    epoch: int = 0
+    is_prefix: bool = False
+    signature: Optional[bytes] = None
+
+    def signed_hash(self) -> bytes:
+        h = hashlib.blake2b(digest_size=32)
+        h.update(self.name.to_bytes())
+        h.update(struct.pack(">Q", self.epoch))
+        h.update(b"\x01" if self.is_prefix else b"\x00")
+        return h.digest()
+
+    def sign(self, signer: Callable[[bytes], bytes]) -> Invalidate:
+        sig = signer(self.signed_hash())
+        if len(sig) != SIGNATURE_BYTES:
+            raise InvalidateError(
+                f"signature must be {SIGNATURE_BYTES} bytes, got {len(sig)}"
+            )
+        self.signature = sig
+        return self
+
+    def verify_signature(self, validator: Callable[[bytes, bytes], bool]) -> bool:
+        if self.signature is None:
+            return False
+        return validator(self.signature, self.signed_hash())
+
+    def to_bytes(self) -> bytes:
+        name_bytes = self.name.to_bytes()
+        buf = bytearray()
+        buf.append(PacketType.INVALIDATE)
+        buf.extend(_write_varint(len(name_bytes)))
+        buf.extend(name_bytes)
+        buf.extend(struct.pack(">Q", self.epoch))
+        flags = 0
+        if self.is_prefix:
+            flags |= 0x01
+        if self.signature is not None:
+            flags |= 0x02
+        buf.append(flags)
+        if self.signature is not None:
+            buf.extend(self.signature)
+        return bytes(buf)
+
+    @classmethod
+    def from_bytes(cls, data: bytes) -> Invalidate:
+        pos = 0
+        if data[pos] != PacketType.INVALIDATE:
+            raise InvalidateError(
+                f"expected INVALIDATE type byte, got {data[pos]:#x}"
+            )
+        pos += 1
+        name_len, consumed = _read_varint(data, pos)
+        pos += consumed
+        if pos + name_len > len(data):
+            raise InvalidateError("buffer too short for name")
+        name = Name.from_bytes(data[pos:pos + name_len])
+        pos += name_len
+        if pos + 8 > len(data):
+            raise InvalidateError("buffer too short for epoch")
+        epoch = struct.unpack(">Q", data[pos:pos + 8])[0]
+        pos += 8
+        if pos >= len(data):
+            raise InvalidateError("buffer too short for flags")
+        flags = data[pos]
+        pos += 1
+        signature = None
+        if flags & 0x02:
+            if pos + SIGNATURE_BYTES > len(data):
+                raise InvalidateError("buffer too short for signature")
+            signature = data[pos:pos + SIGNATURE_BYTES]
+        return cls(name=name, epoch=epoch,
+                   is_prefix=bool(flags & 0x01), signature=signature)
+
+
 @dataclass
 class Packet:
     """A parsed ICN packet with known type."""
@@ -610,6 +730,7 @@ class Packet:
     subscribe: Optional[APSubscribe] = None
     peer: Optional[PropPeer] = None
     cap_peer: Optional[CapPeer] = None
+    invalidate: Optional[Invalidate] = None
 
 
 def parse_packet(data: bytes) -> Packet:
@@ -632,5 +753,8 @@ def parse_packet(data: bytes) -> Packet:
     elif ptype == PacketType.CAP_PEER:
         cap = CapPeer.from_bytes(data)
         return Packet(type=PacketType.CAP_PEER, cap_peer=cap)
+    elif ptype == PacketType.INVALIDATE:
+        inv = Invalidate.from_bytes(data)
+        return Packet(type=PacketType.INVALIDATE, invalidate=inv)
     else:
         raise ValueError(f"unknown packet type: {ptype:#x}")

@@ -47,23 +47,25 @@ class ContentStore:
         self._conn.execute("PRAGMA synchronous=NORMAL")
         self._conn.execute("PRAGMA busy_timeout=5000")
         self._init_schema()
+        self._migrate_schema()
         self._recover_if_needed()
 
     def _init_schema(self) -> None:
         with self._conn:
             self._conn.executescript("""
                 CREATE TABLE IF NOT EXISTS content (
-                    name_hash      BLOB PRIMARY KEY,
-                    name_bytes     BLOB NOT NULL,
-                    content_bytes  BLOB NOT NULL,
-                    content_hash   BLOB NOT NULL,
-                    sequence       INTEGER,
-                    freshness      INTEGER DEFAULT 1,
-                    age_seconds    INTEGER DEFAULT 0,
-                    metadata_json  TEXT,
-                    inserted_at    INTEGER NOT NULL,
-                    expires_at     INTEGER,
-                    size_bytes     INTEGER NOT NULL
+                    name_hash        BLOB PRIMARY KEY,
+                    name_bytes       BLOB NOT NULL,
+                    content_bytes    BLOB NOT NULL,
+                    content_hash     BLOB NOT NULL,
+                    sequence         INTEGER,
+                    freshness        INTEGER DEFAULT 1,
+                    age_seconds      INTEGER DEFAULT 0,
+                    freshness_period INTEGER,
+                    metadata_json    TEXT,
+                    inserted_at      INTEGER NOT NULL,
+                    expires_at       INTEGER,
+                    size_bytes       INTEGER NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS name_prefixes (
                     prefix_hash  BLOB NOT NULL,
@@ -73,6 +75,15 @@ class ContentStore:
                 CREATE INDEX IF NOT EXISTS idx_expires_at ON content(expires_at);
                 CREATE INDEX IF NOT EXISTS idx_inserted_at ON content(inserted_at);
             """)
+
+    def _migrate_schema(self) -> None:
+        """Add columns introduced after the initial schema to existing DBs."""
+        cols = {row[1] for row in self._conn.execute("PRAGMA table_info(content)")}
+        with self._conn:
+            if "freshness_period" not in cols:
+                self._conn.execute(
+                    "ALTER TABLE content ADD COLUMN freshness_period INTEGER"
+                )
 
     def _recover_if_needed(self) -> None:
         """Run integrity check on startup to detect/correct corruption."""
@@ -89,17 +100,18 @@ class ContentStore:
         # Create new clean tables
         self._conn.executescript("""
             CREATE TABLE IF NOT EXISTS content_new (
-                name_hash      BLOB PRIMARY KEY,
-                name_bytes     BLOB NOT NULL,
-                content_bytes  BLOB NOT NULL,
-                content_hash   BLOB NOT NULL,
-                sequence       INTEGER,
-                freshness      INTEGER DEFAULT 1,
-                age_seconds    INTEGER DEFAULT 0,
-                metadata_json  TEXT,
-                inserted_at    INTEGER NOT NULL,
-                expires_at     INTEGER,
-                size_bytes     INTEGER NOT NULL
+                name_hash        BLOB PRIMARY KEY,
+                name_bytes       BLOB NOT NULL,
+                content_bytes    BLOB NOT NULL,
+                content_hash     BLOB NOT NULL,
+                sequence         INTEGER,
+                freshness        INTEGER DEFAULT 1,
+                age_seconds      INTEGER DEFAULT 0,
+                freshness_period INTEGER,
+                metadata_json    TEXT,
+                inserted_at      INTEGER NOT NULL,
+                expires_at       INTEGER,
+                size_bytes       INTEGER NOT NULL
             );
             CREATE TABLE IF NOT EXISTS name_prefixes_new (
                 prefix_hash  BLOB NOT NULL,
@@ -120,7 +132,7 @@ class ContentStore:
             for row in self._conn.execute("SELECT * FROM content"):
                 try:
                     self._conn.execute(
-                        "INSERT INTO content_new VALUES (?,?,?,?,?,?,?,?,?,?,?)", row
+                        "INSERT INTO content_new VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", row
                     )
                 except sqlite3.DatabaseError:
                     pass
@@ -161,11 +173,13 @@ class ContentStore:
         sequence = data.metadata.sequence
         freshness = 1 if data.metadata.freshness.fresh else 0
         age_seconds = 0 if data.metadata.freshness.fresh else data.metadata.freshness.age_seconds
+        freshness_period = data.metadata.freshness_period
         metadata_json = json.dumps({
             "content_hash": content_hash.hex(),
             "sequence": sequence,
             "fresh": data.metadata.freshness.fresh,
             "age_seconds": age_seconds,
+            "freshness_period": freshness_period,
             "signature": data.signature.hex() if data.signature is not None else None,
         })
         inserted_at = int(time.time())
@@ -177,9 +191,9 @@ class ContentStore:
             # Upsert content
             self._conn.execute("""
                 INSERT INTO content (name_hash, name_bytes, content_bytes, content_hash,
-                                     sequence, freshness, age_seconds, metadata_json,
-                                     inserted_at, expires_at, size_bytes)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                     sequence, freshness, age_seconds, freshness_period,
+                                     metadata_json, inserted_at, expires_at, size_bytes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(name_hash) DO UPDATE SET
                     name_bytes=excluded.name_bytes,
                     content_bytes=excluded.content_bytes,
@@ -187,13 +201,14 @@ class ContentStore:
                     sequence=excluded.sequence,
                     freshness=excluded.freshness,
                     age_seconds=excluded.age_seconds,
+                    freshness_period=excluded.freshness_period,
                     metadata_json=excluded.metadata_json,
                     inserted_at=excluded.inserted_at,
                     expires_at=excluded.expires_at,
                     size_bytes=excluded.size_bytes
             """, (name_hash, name_bytes, content_bytes, content_hash,
-                  sequence, freshness, age_seconds, metadata_json,
-                  inserted_at, expires_at, size_bytes))
+                  sequence, freshness, age_seconds, freshness_period,
+                  metadata_json, inserted_at, expires_at, size_bytes))
 
             # Update prefix index
             self._conn.execute("DELETE FROM name_prefixes WHERE name_hash = ?", (name_hash,))
@@ -233,7 +248,8 @@ class ContentStore:
 
         name_hash = self._name_hash(name)
         row = self._conn.execute(
-            "SELECT name_bytes, content_bytes, metadata_json FROM content WHERE name_hash = ?",
+            "SELECT name_bytes, content_bytes, metadata_json, inserted_at, "
+            "freshness_period FROM content WHERE name_hash = ?",
             (name_hash,)
         ).fetchone()
 
@@ -241,14 +257,14 @@ class ContentStore:
             self._misses += 1
             return None
 
-        name_bytes, content_bytes, metadata_json = row
+        name_bytes, content_bytes, metadata_json, inserted_at, freshness_period = row
         stored_name = Name.from_bytes(name_bytes)
         if not self._verify_content(content_bytes, metadata_json):
             self._misses += 1
             return None
 
         self._hits += 1
-        metadata = self._parse_metadata(metadata_json)
+        metadata = self._parse_metadata(metadata_json, inserted_at, freshness_period)
         signature = self._parse_signature(metadata_json)
         return Data(name=stored_name, content=content_bytes,
                     signature=signature, metadata=metadata)
@@ -260,7 +276,8 @@ class ContentStore:
         # Find all names that have this prefix
         prefix_hash = self._prefix_hash(prefix)
         rows = self._conn.execute("""
-            SELECT c.name_bytes, c.content_bytes, c.metadata_json
+            SELECT c.name_bytes, c.content_bytes, c.metadata_json,
+                   c.inserted_at, c.freshness_period
             FROM content c
             JOIN name_prefixes np ON c.name_hash = np.name_hash
             WHERE np.prefix_hash = ?
@@ -272,10 +289,10 @@ class ContentStore:
             return None
 
         # Return first valid match (newest first)
-        for name_bytes, content_bytes, metadata_json in rows:
+        for name_bytes, content_bytes, metadata_json, inserted_at, freshness_period in rows:
             if self._verify_content(content_bytes, metadata_json):
                 stored_name = Name.from_bytes(name_bytes)
-                metadata = self._parse_metadata(metadata_json)
+                metadata = self._parse_metadata(metadata_json, inserted_at, freshness_period)
                 signature = self._parse_signature(metadata_json)
                 self._hits += 1
                 return Data(name=stored_name, content=content_bytes,
@@ -297,15 +314,38 @@ class ContentStore:
         sig_hex = json.loads(metadata_json).get("signature")
         return bytes.fromhex(sig_hex) if sig_hex else None
 
-    def _parse_metadata(self, metadata_json: str) -> DataMetadata:
+    def _parse_metadata(
+        self,
+        metadata_json: str,
+        inserted_at: Optional[int] = None,
+        freshness_period: Optional[int] = None,
+    ) -> DataMetadata:
+        """Reconstruct metadata, computing freshness dynamically from age.
+
+        Freshness is the producer's stored ``fresh`` flag AND, when a
+        ``freshness_period`` was declared, whether the entry has been held for
+        less than that period. ``age_seconds`` always reflects the entry's real
+        age in the cache so callers (e.g. stale-while-revalidate) can reason
+        about how stale it is.
+        """
         meta = json.loads(metadata_json)
-        freshness_fresh = meta.get("fresh", True)
-        freshness_age = meta.get("age_seconds", 0)
-        freshness = Freshness(fresh=freshness_fresh, age_seconds=freshness_age)
+        stored_fresh = meta.get("fresh", True)
+        if freshness_period is None:
+            freshness_period = meta.get("freshness_period")
+
+        if inserted_at is not None:
+            age = max(0, int(time.time()) - int(inserted_at))
+        else:
+            age = meta.get("age_seconds", 0)
+
+        within_period = freshness_period is None or age < freshness_period
+        fresh = stored_fresh and within_period
+        freshness = Freshness(fresh=fresh, age_seconds=age)
         return DataMetadata(
             content_hash=bytes.fromhex(meta["content_hash"]),
             sequence=meta.get("sequence"),
             freshness=freshness,
+            freshness_period=freshness_period,
         )
 
     def _purge_expired_internal(self) -> int:
@@ -341,6 +381,39 @@ class ContentStore:
             cur = self._conn.execute("DELETE FROM content WHERE name_hash = ?", (name_hash,))
             self._conn.execute("DELETE FROM name_prefixes WHERE name_hash = ?", (name_hash,))
             return cur.rowcount > 0
+
+    def invalidate(self, name: Name, prefix: bool = False) -> int:
+        """Purge an exact name (or, if ``prefix``, every name under it).
+
+        Returns the number of entries removed. Used by the cache-invalidation
+        protocol so a producer can actively evict stale content from caches.
+        """
+        with self._conn:
+            if not prefix:
+                cur = self._conn.execute(
+                    "DELETE FROM content WHERE name_hash = ?", (self._name_hash(name),)
+                )
+                self._conn.execute(
+                    "DELETE FROM name_prefixes WHERE name_hash = ?",
+                    (self._name_hash(name),)
+                )
+                return cur.rowcount
+
+            prefix_hash = self._prefix_hash(name)
+            rows = self._conn.execute(
+                "SELECT name_hash FROM name_prefixes WHERE prefix_hash = ?",
+                (prefix_hash,)
+            ).fetchall()
+            removed = 0
+            for (name_hash,) in rows:
+                cur = self._conn.execute(
+                    "DELETE FROM content WHERE name_hash = ?", (name_hash,)
+                )
+                self._conn.execute(
+                    "DELETE FROM name_prefixes WHERE name_hash = ?", (name_hash,)
+                )
+                removed += cur.rowcount
+            return removed
 
     def contains(self, name: Name) -> bool:
         name_hash = self._name_hash(name)

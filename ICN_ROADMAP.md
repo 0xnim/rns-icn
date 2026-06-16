@@ -15,7 +15,7 @@ Phases 1 and 2 are complete; parts of Phase 4 (capability negotiation, pub/sub, 
 | Client fetch | `ICNClient` with retry + timeout config | — |
 | Link establishment | `LinkPool` w/ reuse, health, announce injection | reconnect is on-use, not proactive |
 | Content store | SQLite + TTL + LRU + crash recovery | — |
-| Forwarding | Multi-hop (FIB/PIT/CS); `icn-router` binary | no cache coherency, no multi-path |
+| Forwarding | Multi-hop (FIB/PIT/CS); `icn-router` binary; **cache coherency** (freshness period, stale-while-revalidate, signed invalidation) | no multi-path |
 | Naming | /hash/label, content-hash verified, **Ed25519 producer signatures** | access control + name resolution (Phase 3.3/3.4) |
 | API | Versioned via capability exchange | per-packet version not in Interest/Data |
 | Operations | TOML config, JSON logs, health + metrics | — |
@@ -77,11 +77,21 @@ Phases 1 and 2 are complete; parts of Phase 4 (capability negotiation, pub/sub, 
 - [ ] Multi-path support (ECMP or primary/backup)
 
 ### 2.4 Cache Coherency
-- [ ] Cache validation (CheckFreshness Interest)
-- [ ] Stale-while-revalidate
-- [ ] Cache purge/invalidation protocol
+- [x] Cache validation: Data carries a `freshness_period` (`DataMetadata`); the
+  ContentStore computes freshness from age on read, so cached entries age to
+  stale and `must_be_fresh` Interests revalidate upstream instead of serving
+  indefinitely (`content_store.py`, `strategy.py`)
+- [x] Stale-while-revalidate: a stale-but-servable cache hit is returned
+  immediately while a deduped background Interest refreshes it upstream
+  (`StrategyDecision.SERVE_STALE_REVALIDATE`, `Forwarder._schedule_revalidation`;
+  window configured by `cs_stale_while_revalidate`)
+- [x] Cache purge/invalidation protocol: producer-signed `Invalidate` packet
+  (`PacketType.INVALIDATE`), self-certifying via the producer's RNS identity,
+  applied to the local store and forwarded one hop with epoch-based replay
+  suppression (`ContentStore.invalidate`, `ICNServer.handle_invalidate`/
+  `invalidate`). Mesh-wide flood + revocation hardening deferred to Phase 3.4.
 
-**Deliverable:** ✅ `icn-router` binary. Client ↔ Router ↔ Server works over real RNS and content caches at the hop — proven end-to-end by `tests/test_integration.py::TestRNSMultiHop` (three processes, three Reticulum instances over localhost TCP). **Residual for full Phase 2:** §2.4 cache coherency, plus dynamic FIB updates / multi-path (§2.3).
+**Deliverable:** ✅ `icn-router` binary. Client ↔ Router ↔ Server works over real RNS and content caches at the hop — proven end-to-end by `tests/test_integration.py::TestRNSMultiHop` (three processes, three Reticulum instances over localhost TCP). Cache coherency (§2.4) has landed. **Residual for full Phase 2:** dynamic FIB updates / multi-path (§2.3).
 
 ---
 
