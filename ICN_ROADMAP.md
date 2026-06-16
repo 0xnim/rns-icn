@@ -8,7 +8,7 @@
 
 ## Current State
 
-Phases 1 and 2 are complete; parts of Phase 4 (capability negotiation, pub/sub, chunked transfer) landed early. Phase 3.1 (signed manifests, authenticated sequence/timestamp, key rotation) and 3.2 (per-packet/per-chunk producer signatures) are implemented, as is the key-management half of 3.4 (revocation + mesh distribution of rotation bundles); access control (3.3) and the rest of name resolution (3.4: petnames, TOFU) remain.
+Phases 1 and 2 are complete; parts of Phase 4 (capability negotiation, pub/sub, chunked transfer) landed early. Phase 3.1 (signed manifests, authenticated sequence/timestamp, key rotation), 3.2 (per-packet/per-chunk producer signatures), and the key-management half of 3.4 (revocation + mesh distribution of rotation bundles) are implemented. Access control (3.3) remains; the rest of 3.4 (petnames, TOFU) is **skipped by design** — a global human-readable namespace doesn't fit an offline-first mesh, and a local petname map belongs to the application layer and needs no protocol change (see §3.4).
 
 | Component | Status | Gaps |
 |-----------|--------|------|
@@ -16,7 +16,7 @@ Phases 1 and 2 are complete; parts of Phase 4 (capability negotiation, pub/sub, 
 | Link establishment | `LinkPool` w/ reuse, health, announce injection | reconnect is on-use, not proactive |
 | Content store | SQLite + TTL + LRU + crash recovery | — |
 | Forwarding | Multi-hop (FIB/PIT/CS); `icn-router` binary; **cache coherency** (freshness period, stale-while-revalidate, signed invalidation) | no multi-path |
-| Naming | /hash/label, content-hash verified, **Ed25519 producer signatures** (sequence + timestamp authenticated; client rollback protection; **key rotation + anchor-signed revocation** via signed delegation chains, distributed over the mesh as self-verifying bundles) | access control + petname/TOFU resolution (Phase 3.3/3.4) |
+| Naming | /hash/label, content-hash verified, **Ed25519 producer signatures** (sequence + timestamp authenticated; client rollback protection; **key rotation + anchor-signed revocation** via signed delegation chains, distributed over the mesh as self-verifying bundles) | access control (Phase 3.3); petname/TOFU resolution skipped by design |
 | API | Versioned via capability exchange | per-packet version not in Interest/Data |
 | Operations | TOML config, JSON logs, health + metrics | — |
 
@@ -133,8 +133,17 @@ Phases 1 and 2 are complete; parts of Phase 4 (capability negotiation, pub/sub, 
 - [ ] ACL per prefix (producer config)
 
 ### 3.4 Name Resolution
-- [ ] Human-readable names → producer hash (Petname / DNS-like)
-- [ ] Trust-on-first-use (TOFU) for producers
+- [ ] ~~Human-readable names → producer hash (Petname / DNS-like)~~ — **skipped
+  by design.** Self-certifying names are secure + decentralized; adding a global
+  human-meaningful layer (Zooko's triangle) needs either a central authority
+  (DNS) or consensus (blockchain), both at odds with an offline-first mesh, and
+  Reticulum offers no naming standard to build on. A purely local petname map is
+  the only fit and is deliberately left to the application/UI layer — it stays
+  off the wire (Interests/Data always carry the hash), so it can be added later
+  without any protocol change.
+- [ ] ~~Trust-on-first-use (TOFU) for producers~~ — **skipped by design**
+  alongside petnames (the two form one resolution story); revisit only if a
+  concrete UX needs it.
 - [x] Revocation / key expiry: a `rotation.Revocation` (signed by the namespace
   anchor — the root of trust) removes a compromised key *and every key it
   transitively delegated* (cascade) from the authorized set, the shrinking
@@ -147,7 +156,7 @@ Phases 1 and 2 are complete; parts of Phase 4 (capability negotiation, pub/sub, 
   producer so a relay can't graft a foreign chain). The bundle wire format is a
   backward-compatible superset of the bare chain.
 
-**Deliverable:** Signed manifests + data, producer auth, encrypted content option, name resolution.
+**Deliverable:** Signed manifests + data, producer auth, key rotation + revocation, encrypted content option. (Human-readable name resolution skipped by design — see §3.4.)
 
 ---
 
