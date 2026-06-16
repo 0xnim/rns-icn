@@ -20,12 +20,15 @@ Architecture:
 from __future__ import annotations
 
 import asyncio
+import logging
 import struct
 from typing import Callable, Optional
 
 import RNS
 
 from .packet import Data
+
+logger = logging.getLogger(__name__)
 
 # ── Constants ──
 
@@ -191,7 +194,8 @@ class ResourceListener:
             resource.data.seek(0)
             payload = resource.data.read()
         except Exception:
-            return  # malformed — skip silently
+            logger.debug("could not read completed resource payload", exc_info=True)
+            return  # malformed — skip
 
         # Always fire the raw callback if set
         if self._on_raw is not None:
@@ -205,7 +209,8 @@ class ResourceListener:
         try:
             data = Data.from_bytes(inner)
         except Exception:
-            return  # not a valid ICN Data packet
+            logger.debug("tagged resource was not a valid ICN Data packet", exc_info=True)
+            return
 
         if self._on_data is not None:
             self._on_data(data)

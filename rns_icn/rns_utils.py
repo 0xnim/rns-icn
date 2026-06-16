@@ -46,8 +46,8 @@ def load_transport_identity() -> Optional[RNS.Identity]:
             ident = RNS.Identity.from_file(ti_path)
             if ident:
                 return ident
-    except Exception:
-        pass
+    except Exception as e:
+        RNS.log(f"Could not load shared transport identity: {e}", RNS.LOG_DEBUG)
     return None
 
 

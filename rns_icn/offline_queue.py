@@ -14,11 +14,14 @@ Design:
 
 from __future__ import annotations
 
+import logging
 import time
 
 from .face import FaceId
 from .name import Name
 from .packet import Data
+
+logger = logging.getLogger(__name__)
 
 
 class OfflineQueue:
@@ -67,7 +70,9 @@ class OfflineQueue:
                 await face.send_data(data)
                 sent += 1
             except Exception:
-                pass
+                logger.warning(
+                    "drain to face %s failed for %s", face.id(), stream_name, exc_info=True
+                )
         return sent
 
     # ── Inspection / management ─────────────────────────────────────────

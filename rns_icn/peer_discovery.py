@@ -142,7 +142,7 @@ class PeerDiscoveryManager:
             try:
                 RNS.Transport.deregister_announce_handler(self._handler_id)
             except Exception:
-                pass
+                logger.debug("deregister_announce_handler failed", exc_info=True)
         self._peers.clear()
 
     # ── Callbacks ──

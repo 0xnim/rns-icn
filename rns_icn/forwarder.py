@@ -7,6 +7,7 @@ and incoming Data (producer/relay-facing).
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from collections.abc import AsyncIterator
 from typing import Optional
@@ -18,6 +19,8 @@ from .name import Name
 from .packet import Data, Interest, InterestSelector
 from .pit import Pit
 from .strategy import BestRoute, Strategy, StrategyDecision
+
+logger = logging.getLogger(__name__)
 
 
 class Forwarder:
@@ -166,7 +169,9 @@ class Forwarder:
             try:
                 await self._forward(revalidate, in_face, out_face_id)
             except Exception:
-                pass
+                logger.warning(
+                    "background revalidation failed for %s", revalidate.name, exc_info=True
+                )
             finally:
                 self._revalidating.discard(name)
 

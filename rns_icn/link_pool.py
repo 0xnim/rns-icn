@@ -55,8 +55,8 @@ class LinkPool:
         for link in list(self._links.values()):
             try:
                 link.teardown()
-            except Exception:
-                pass
+            except Exception as e:
+                RNS.log(f"ICN LinkPool: link teardown on stop failed: {e}", RNS.LOG_DEBUG)
         await asyncio.sleep(0.2)
         self._links.clear()
         self._health.clear()
@@ -134,8 +134,8 @@ class LinkPool:
             if time.time() - start > timeout:
                 try:
                     link.teardown()
-                except Exception:
-                    pass
+                except Exception as e:
+                    RNS.log(f"ICN LinkPool: teardown of timed-out link failed: {e}", RNS.LOG_DEBUG)
                 return None
 
         return link
@@ -150,8 +150,8 @@ class LinkPool:
                 if h in self._links:
                     try:
                         self._links[h].teardown()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        RNS.log(f"ICN LinkPool: teardown of idle link failed: {e}", RNS.LOG_DEBUG)
                     del self._links[h]
                     del self._health[h]
                     # Record link down

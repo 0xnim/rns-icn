@@ -17,11 +17,14 @@ Usage:
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Optional
 
 from .face import FaceId
 from .name import Name
 from .packet import Data
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from .server import ICNServer
@@ -125,6 +128,9 @@ class APSManager:
                     await face.send_data(data)
                     sent += 1
                 except Exception:
+                    logger.debug(
+                        "push delivery to face %s failed; queueing", face_id, exc_info=True
+                    )
                     if offline_queue is not None:
                         # Enqueue under the stream names the face subscribed to
                         self._enqueue_for_face(face_id, data, offline_queue)

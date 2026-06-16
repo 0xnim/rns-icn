@@ -142,7 +142,7 @@ class PropagationManager:
             try:
                 return Manifest.from_data(cached_data)
             except Exception:
-                pass
+                logger.debug("failed to parse cached peer manifest", exc_info=True)
 
         # Fall back to express Interest fetch
         data = await self.fetch_peer_manifest_raw(face_id)
@@ -152,6 +152,7 @@ class PropagationManager:
         try:
             return Manifest.from_data(data)
         except Exception:
+            logger.debug("failed to parse fetched peer manifest", exc_info=True)
             return None
 
     async def fetch_downstream_manifests(self) -> dict[bytes, "Manifest"]:
@@ -183,7 +184,10 @@ class PropagationManager:
                 try:
                     results[addr] = Manifest.from_data(manifest_data)
                 except Exception:
-                    pass
+                    logger.debug(
+                        "failed to parse downstream manifest from %s", addr.hex()[:16],
+                        exc_info=True,
+                    )
         return results
 
     async def fetch_peer_manifest_raw(self, face_id: FaceId) -> Optional[Data]:

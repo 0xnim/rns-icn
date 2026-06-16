@@ -15,6 +15,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8",
+    "pytest-cov>=5",
     "ruff>=0.6",
     "mypy>=1.11",
 ]
@@ -32,6 +33,22 @@ icn-fetch = "rns_icn.cli_fetch:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["rns_icn"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+# Floor sits a safe margin under the measured ~74% (branch coverage on) so it
+# locks in a baseline without being flaky. Raise as coverage improves.
+fail_under = 70
+# Integration-only and trivial unreachable lines are excluded from the count.
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+]
 
 [tool.ruff]
 line-length = 100

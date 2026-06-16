@@ -30,7 +30,30 @@ jobs:
         run: ruff check .
 
       - name: Test (pytest)
-        run: pytest -q
+        run: pytest -q --cov=rns_icn --cov-report=term-missing
 
       - name: Type check (mypy)
         run: mypy rns_icn
+
+  integration:
+    # Real RNS over TCP loopback; non-blocking until proven stable in CI.
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Integration tests (real RNS)
+        run: pytest -q tests/test_integration.py
+        env:
+          RNS_INTEGRATION: "1"

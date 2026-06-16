@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Optional
@@ -11,6 +12,8 @@ from .packet import Data, Interest, PacketType
 
 if TYPE_CHECKING:
     import RNS
+
+logger = logging.getLogger(__name__)
 
 FaceId = int
 
@@ -240,4 +243,4 @@ class LinkFace(Face):
         try:
             self._link.teardown()
         except Exception:
-            pass
+            logger.debug("link teardown on face close failed", exc_info=True)
