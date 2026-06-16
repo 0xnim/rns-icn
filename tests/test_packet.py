@@ -307,3 +307,40 @@ class TestPacket:
     def test_parse_bad_type(self):
         with pytest.raises(ValueError):
             parse_packet(b"\xFF\x00")
+
+
+class TestEncryptedFlag:
+    """Phase 3.3: the authenticated `encrypted` metadata flag."""
+
+    def test_metadata_encrypted_round_trip(self):
+        meta = DataMetadata(content_hash=b"\x00" * 32, encrypted=True)
+        restored = DataMetadata.from_bytes(meta.to_bytes())
+        assert restored.encrypted is True
+
+    def test_metadata_defaults_unencrypted(self):
+        meta = DataMetadata(content_hash=b"\x00" * 32)
+        assert DataMetadata.from_bytes(meta.to_bytes()).encrypted is False
+
+    def test_data_encrypted_flag_survives_serialization(self):
+        data = Data.new(name=Name(rns_addr(0x01), [b"sec"]), content=b"ciphertext")
+        data.metadata.encrypted = True
+        restored = Data.from_bytes(data.to_bytes())
+        assert restored.metadata.encrypted is True
+
+    def test_signed_hash_binds_encrypted_flag(self):
+        # signed_hash differs by the encrypted flag, so a relay flipping it
+        # invalidates the producer signature.
+        name = Name(rns_addr(0x01), [b"sec"])
+        plain = Data.new(name=name, content=b"x")
+        enc = Data.new(name=name, content=b"x")
+        enc.metadata.encrypted = True
+        assert plain.signed_hash() != enc.signed_hash()
+
+    def test_pre_33_signature_unaffected(self):
+        # Unencrypted Data hashes exactly as before (flag only appended when set).
+        name = Name(rns_addr(0x01), [b"doc"])
+        data = Data.new(name=name, content=b"hello")
+        h = data.signed_hash()
+        # Re-deriving with encrypted explicitly False must be identical.
+        data.metadata.encrypted = False
+        assert data.signed_hash() == h

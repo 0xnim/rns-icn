@@ -10,7 +10,7 @@ from typing import Optional
 
 import RNS
 
-from . import rotation
+from . import access, rotation
 from .config import ClientConfig
 from .face import LinkFace
 from .forwarder import Forwarder
@@ -44,6 +44,9 @@ class ICNClient:
         self._rotation_store: dict[bytes, list[rotation.KeyRotation]] = {}
         # producer addr → its key revocations (paired with the chain above).
         self._revocation_store: dict[bytes, list[rotation.Revocation]] = {}
+        # producer addr → capabilities (rns_icn.access) granting this client read
+        # access to restricted prefixes, loaded from config.capabilities.
+        self._capability_store: dict[bytes, list[access.Capability]] = {}
 
     async def __aenter__(self) -> "ICNClient":
         return await self.start()
@@ -85,6 +88,7 @@ class ICNClient:
         await self._link_pool.start()
 
         self._load_rotation_chains()
+        self._load_capabilities()
 
         return self
 
@@ -109,6 +113,20 @@ class ICNClient:
                 self._revocation_store[producer] = bundle.revocations
             except Exception as e:
                 RNS.log(f"ICN: skipping invalid rotation bundle {path}: {e}", RNS.LOG_WARNING)
+
+    def _load_capabilities(self) -> None:
+        """Load configured capability files, keyed by producer address.
+
+        A malformed file is skipped with a warning rather than failing startup.
+        Signatures are checked lazily at decryption time against the producer's
+        authorized key.
+        """
+        for path in self.config.capabilities:
+            try:
+                cap = access.load_capability(path)
+                self._capability_store.setdefault(cap.producer, []).append(cap)
+            except Exception as e:
+                RNS.log(f"ICN: skipping invalid capability {path}: {e}", RNS.LOG_WARNING)
 
     async def shutdown(self) -> None:
         """Gracefully stop link pool and RNS."""
@@ -170,6 +188,7 @@ class ICNClient:
                         if not rb_ok:
                             last_error = rb_err
                             continue
+                        result = self._maybe_decrypt(result)
                     # Record successful fetch latency
                     fetch_latency = time.time() - fetch_start
                     metrics.record_fetch(fetch_latency, success=True)
@@ -269,6 +288,66 @@ class ICNClient:
         if previous is None or key > previous:
             self._seen_signed_key[name_key] = key
         return True, None
+
+    def _producer_validators(self, producer_addr: bytes):
+        """Validators authorized to sign for a producer, or None if unknown.
+
+        Prefers the producer's rotation chain (self-certifying, revocation-aware);
+        otherwise recalls the producer identity from the mesh. Returns None when
+        neither is available (offline, no chain).
+        """
+        certs = self._rotation_store.get(producer_addr)
+        if certs:
+            try:
+                return rotation.authorized_validators(
+                    producer_addr, certs, self._revocation_store.get(producer_addr)
+                )
+            except rotation.RotationError:
+                return None
+        identity = RNS.Identity.recall(producer_addr, from_identity_hash=True)
+        if identity is not None:
+            return [identity.validate]
+        return None
+
+    def _maybe_decrypt(self, data: Data) -> Data:
+        """Decrypt restricted Data in place if we hold a capability for it.
+
+        For encrypted Data, looks for a valid capability covering the name,
+        verifies the producer's signature on it (when the producer key is
+        known), unwraps the CEK with our identity, and returns a plaintext Data.
+        If no usable capability is found the ciphertext Data is returned
+        unchanged (the ``encrypted`` flag stays set so the caller can tell).
+
+        Note the AEAD content decryption and ECIES CEK unwrap are themselves
+        authenticated, so a forged capability fails closed even if its signature
+        could not be checked offline.
+        """
+        if not data.metadata.encrypted:
+            return data
+        caps = self._capability_store.get(data.name.rns_addr)
+        if not caps:
+            return data
+        now = int(time.time())
+        for cap in caps:
+            if not cap.covers(data.name, now):
+                continue
+            validators = self._producer_validators(cap.producer)
+            if validators is not None and not any(
+                cap.verify_signature(v) for v in validators
+            ):
+                continue
+            try:
+                cek = cap.unwrap(self.identity)
+                plaintext = access.decrypt_content(data.content, cek)
+            except access.AccessError:
+                continue
+            out = Data.new(name=data.name, content=plaintext)
+            out.metadata.sequence = data.metadata.sequence
+            out.metadata.freshness = data.metadata.freshness
+            out.metadata.freshness_period = data.metadata.freshness_period
+            out.metadata.signed_at = data.metadata.signed_at
+            return out
+        return data
 
     async def fetch_rotation_bundle(
         self,

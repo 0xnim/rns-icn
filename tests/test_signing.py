@@ -180,6 +180,23 @@ def test_content_store_persists_signed_envelope(tmp_path, identity):
     assert got.verify_signature(identity.validate)
 
 
+def test_content_store_persists_encrypted_flag(tmp_path, identity):
+    """The encrypted flag survives the store round-trip and the cached ciphertext
+    still verifies (the signature covers the flag — see test_packet)."""
+    cs = ContentStore(str(tmp_path / "cs.db"), max_entries=10, default_ttl=86400)
+    name = Name(rns_addr(), [b"sec", b"doc"])
+    data = Data.new(name=name, content=b"ciphertext-bytes")
+    data.metadata.encrypted = True
+    data.sign(identity.sign)
+
+    cs.insert(name, data)
+    got = cs.get(name)
+
+    assert got is not None
+    assert got.metadata.encrypted is True
+    assert got.verify_signature(identity.validate)
+
+
 def test_content_store_unsigned_stays_unsigned(tmp_path):
     cs = ContentStore(str(tmp_path / "cs.db"), max_entries=10, default_ttl=86400)
     name = Name(rns_addr(), [b"doc"])
@@ -206,6 +223,9 @@ class _ClientForPolicy:
     from rns_icn.client import ICNClient as _C
     _check_signature = _C._check_signature
     _check_rollback = _C._check_rollback
+    _maybe_decrypt = _C._maybe_decrypt
+    _producer_validators = _C._producer_validators
+    identity = _C.identity  # property, for _maybe_decrypt
 
 
 def _rollback_client(reject_rollback: bool):
@@ -417,6 +437,96 @@ def test_anchor_still_valid_after_revoking_delegate():
     client._revocation_store = {anchor.hash: [rev]}
     data = Data.new(name=Name(anchor.hash, [b"doc"]), content=b"x").sign(anchor.sign)
     assert client._check_signature(data)[0]
+
+
+# ── Access control (Phase 3.3: _maybe_decrypt honours capabilities) ──
+
+from rns_icn.access import (  # noqa: E402
+    Capability,
+    derive_cek,
+    encrypt_content,
+)
+
+
+def _decrypt_client(identity, capability=None, rotation_store=None):
+    client = object.__new__(_ClientForPolicy)
+    client.config = ClientConfig()
+    client._identity = identity
+    client._rotation_store = rotation_store or {}
+    client._revocation_store = {}
+    store = {}
+    if capability is not None:
+        store.setdefault(capability.producer, []).append(capability)
+    client._capability_store = store
+    return client
+
+
+def _encrypted_data(producer, label=b"private", content=b"top secret"):
+    prefix = Name(producer.hash, [label])
+    cek = derive_cek(producer, prefix)
+    name = Name(producer.hash, [label, b"doc"])
+    data = Data.new(name=name, content=encrypt_content(content, cek))
+    data.metadata.encrypted = True
+    data.sign(producer.sign)
+    return data, prefix, name
+
+
+def test_capability_decrypts_restricted_data(not_recallable):
+    producer, consumer = RNS.Identity(), RNS.Identity()
+    data, prefix, name = _encrypted_data(producer)
+    cap = Capability.create(prefix, consumer, producer, producer.sign)
+    out = _decrypt_client(consumer, cap)._maybe_decrypt(data)
+    assert out.content == b"top secret"
+    assert out.metadata.encrypted is False
+    assert out.verify_content_hash()
+
+
+def test_no_capability_returns_ciphertext(not_recallable):
+    producer, consumer = RNS.Identity(), RNS.Identity()
+    data, _, _ = _encrypted_data(producer)
+    out = _decrypt_client(consumer, capability=None)._maybe_decrypt(data)
+    assert out.metadata.encrypted is True
+    assert out.content == data.content  # untouched ciphertext
+
+
+def test_wrong_consumer_cannot_decrypt(not_recallable):
+    producer, consumer, attacker = RNS.Identity(), RNS.Identity(), RNS.Identity()
+    data, prefix, _ = _encrypted_data(producer)
+    cap = Capability.create(prefix, consumer, producer, producer.sign)
+    # The attacker holds the capability bytes but not the consumer's private key.
+    out = _decrypt_client(attacker, cap)._maybe_decrypt(data)
+    assert out.metadata.encrypted is True
+    assert out.content == data.content
+
+
+def test_expired_capability_not_used(not_recallable):
+    producer, consumer = RNS.Identity(), RNS.Identity()
+    data, prefix, _ = _encrypted_data(producer)
+    cap = Capability.create(
+        prefix, consumer, producer, producer.sign, ttl_seconds=1, now=1
+    )  # long expired
+    out = _decrypt_client(consumer, cap)._maybe_decrypt(data)
+    assert out.metadata.encrypted is True
+
+
+def test_plaintext_data_passes_through(not_recallable):
+    producer, consumer = RNS.Identity(), RNS.Identity()
+    data = Data.new(name=Name(producer.hash, [b"public"]), content=b"hi")
+    out = _decrypt_client(consumer)._maybe_decrypt(data)
+    assert out is data
+
+
+def test_forged_capability_signature_rejected_when_producer_known(monkeypatch):
+    producer, consumer = RNS.Identity(), RNS.Identity()
+    monkeypatch.setattr(
+        RNS.Identity, "recall",
+        staticmethod(lambda _addr, from_identity_hash=False: producer),
+    )
+    data, prefix, _ = _encrypted_data(producer)
+    cap = Capability.create(prefix, consumer, producer, producer.sign)
+    cap.signature = b"\x00" * 64  # forged
+    out = _decrypt_client(consumer, cap)._maybe_decrypt(data)
+    assert out.metadata.encrypted is True  # capability skipped, not decrypted
 
 
 # ── Per-chunk signatures (Phase 3.2: resource_transport / streamed files) ──

@@ -8,7 +8,7 @@
 
 ## Current State
 
-Phases 1 and 2 are complete; parts of Phase 4 (capability negotiation, pub/sub, chunked transfer) landed early. Phase 3.1 (signed manifests, authenticated sequence/timestamp, key rotation), 3.2 (per-packet/per-chunk producer signatures), and the key-management half of 3.4 (revocation + mesh distribution of rotation bundles) are implemented. Access control (3.3) remains; the rest of 3.4 (petnames, TOFU) is **skipped by design** — a global human-readable namespace doesn't fit an offline-first mesh, and a local petname map belongs to the application layer and needs no protocol change (see §3.4).
+Phases 1 and 2 are complete; parts of Phase 4 (capability negotiation, pub/sub, chunked transfer) landed early. Phase 3.1 (signed manifests, authenticated sequence/timestamp, key rotation), 3.2 (per-packet/per-chunk producer signatures), 3.3 (access control: per-prefix ACLs, encrypted content, capability tokens), and the key-management half of 3.4 (revocation + mesh distribution of rotation bundles) are implemented. The rest of 3.4 (petnames, TOFU) is **skipped by design** — a global human-readable namespace doesn't fit an offline-first mesh, and a local petname map belongs to the application layer and needs no protocol change (see §3.4). Phase 3 is otherwise complete.
 
 | Component | Status | Gaps |
 |-----------|--------|------|
@@ -16,7 +16,7 @@ Phases 1 and 2 are complete; parts of Phase 4 (capability negotiation, pub/sub, 
 | Link establishment | `LinkPool` w/ reuse, health, announce injection | reconnect is on-use, not proactive |
 | Content store | SQLite + TTL + LRU + crash recovery | — |
 | Forwarding | Multi-hop (FIB/PIT/CS); `icn-router` binary; **cache coherency** (freshness period, stale-while-revalidate, signed invalidation) | no multi-path |
-| Naming | /hash/label, content-hash verified, **Ed25519 producer signatures** (sequence + timestamp authenticated; client rollback protection; **key rotation + anchor-signed revocation** via signed delegation chains, distributed over the mesh as self-verifying bundles) | access control (Phase 3.3); petname/TOFU resolution skipped by design |
+| Naming | /hash/label, content-hash verified, **Ed25519 producer signatures** (sequence + timestamp authenticated; client rollback protection; **key rotation + anchor-signed revocation** via signed delegation chains, distributed over the mesh as self-verifying bundles); **per-prefix access control** (encrypted content + capability tokens) | petname/TOFU resolution skipped by design |
 | API | Versioned via capability exchange | per-packet version not in Interest/Data |
 | Operations | TOML config, JSON logs, health + metrics | — |
 
@@ -128,9 +128,29 @@ Phases 1 and 2 are complete; parts of Phase 4 (capability negotiation, pub/sub, 
 - [x] Per-chunk signatures for `resource_transport` (selective verification of streamed large files): `chunk_content(..., signer=)` signs each chunk Data with the producer key; `assemble`/`assemble_verified`/`verify_chunk(s)` take an optional `validator` and raise `SignatureError` on missing/forged chunk signatures — defends streamed files against chunk substitution by a relay/cache
 
 ### 3.3 Access Control
-- [ ] Encrypted content (optional per-packet)
-- [ ] Access tokens (capability-based)
-- [ ] ACL per prefix (producer config)
+Implemented as NDN-NAC-style name-based access control (`rns_icn/access.py`),
+the only model that holds when content lives in caches the producer doesn't
+control: the boundary is encryption, not "don't serve it."
+- [x] ACL per prefix (producer config): `ServerConfig.access_rules` lists, per
+  name prefix, the consumer identities allowed to read it; `AccessController`
+  does longest-prefix matching and is the authorization boundary for issuance.
+- [x] Encrypted content (optional per-packet): content under a restricted prefix
+  is encrypted at publish with a CEK *derived from the producer's private key +
+  prefix* (`derive_cek` — stable, never stored, so cached ciphertext stays
+  decryptable). The hash and producer signature cover the ciphertext, so caching
+  / dedup / verification are untouched; an authenticated `encrypted` flag is
+  bound into the signed envelope (Phase 3.1 style, appended) so a relay can't
+  flip it. Persisted through the ContentStore.
+- [x] Access tokens (capability-based): a producer-signed `Capability` binds
+  (consumer, prefix, validity) and carries the CEK *wrapped to the consumer's
+  RNS identity* (ECIES). The consumer verifies the producer signature
+  (self-certifying, rotation/revocation-aware via `ICNClient._producer_validators`),
+  unwraps the CEK, and `ICNClient._maybe_decrypt` returns plaintext. AEAD +
+  ECIES make decryption fail closed even if a forged capability's signature
+  can't be checked offline. Capabilities load from `ClientConfig.capabilities`;
+  `ICNServer.issue_capability` mints them. (Mesh distribution of capabilities is
+  possible — the wrapped CEK is opaque to non-recipients — but left to the
+  operator for now.)
 
 ### 3.4 Name Resolution
 - [ ] ~~Human-readable names → producer hash (Petname / DNS-like)~~ — **skipped
@@ -156,7 +176,7 @@ Phases 1 and 2 are complete; parts of Phase 4 (capability negotiation, pub/sub, 
   producer so a relay can't graft a foreign chain). The bundle wire format is a
   backward-compatible superset of the bare chain.
 
-**Deliverable:** Signed manifests + data, producer auth, key rotation + revocation, encrypted content option. (Human-readable name resolution skipped by design — see §3.4.)
+**Deliverable:** Signed manifests + data, producer auth, key rotation + revocation, per-prefix access control (encrypted content + capability tokens). (Human-readable name resolution skipped by design — see §3.4.) **Phase 3 complete.**
 
 ---
 

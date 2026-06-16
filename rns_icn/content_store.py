@@ -181,6 +181,7 @@ class ContentStore:
             "age_seconds": age_seconds,
             "freshness_period": freshness_period,
             "signed_at": data.metadata.signed_at,
+            "encrypted": data.metadata.encrypted,
             "signature": data.signature.hex() if data.signature is not None else None,
         })
         inserted_at = int(time.time())
@@ -348,6 +349,7 @@ class ContentStore:
             freshness=freshness,
             freshness_period=freshness_period,
             signed_at=meta.get("signed_at"),
+            encrypted=meta.get("encrypted", False),
         )
 
     def _purge_expired_internal(self) -> int:

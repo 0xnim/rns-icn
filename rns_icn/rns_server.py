@@ -20,6 +20,7 @@ import RNS
 if TYPE_CHECKING:
     from aiohttp import web
 
+from . import access
 from .config import ServerConfig
 from .face import FaceId, LinkFace
 from .health import handle_health_interest, is_health_interest
@@ -122,6 +123,22 @@ class ICNServer(BaseICNServer):
             self.forwarder.strategy = BestRoute(
                 stale_while_revalidate=config.cs_stale_while_revalidate,
             )
+
+        # Per-prefix access control (Phase 3.3): builds an AccessController from
+        # config.access_rules so restricted prefixes are encrypted at publish and
+        # capabilities can be issued to authorized consumers. The CEK is derived
+        # from the anchor identity (the namespace owner).
+        self._access = access.AccessController(
+            producer_identity=self.identity,
+            producer_addr=self.rns_addr,
+            rules=[
+                access.AccessRule(
+                    prefix=Name(self.rns_addr, [lbl.encode() for lbl in rule.prefix]),
+                    consumers={bytes.fromhex(c) for c in rule.consumers},
+                )
+                for rule in config.access_rules
+            ],
+        )
 
         # Destination created in start()
         self.destination: Optional[RNS.Destination] = None
@@ -387,12 +404,39 @@ class ICNServer(BaseICNServer):
                 break
 
     def publish_content(self, name: Name, content: bytes, sequence: Optional[int] = None) -> None:
-        """Publish content into the ContentStore."""
-        data = Data.new(name=name, content=content)
+        """Publish content into the ContentStore.
+
+        Content under a restricted prefix (config.access_rules) is encrypted with
+        the prefix CEK before storage, so the stored/served ciphertext is what
+        caches relay and what the producer signs — only consumers holding a
+        capability can read it.
+        """
+        content_bytes, encrypted = self._access.encrypt_content(name, content)
+        data = Data.new(name=name, content=content_bytes)
+        data.metadata.encrypted = encrypted
         if sequence is not None:
             data.with_sequence(sequence)
         self.forwarder.cs.insert(name, data)
-        RNS.log(f"ICN: Published {name} ({len(content)} bytes)")
+        suffix = " (encrypted)" if encrypted else ""
+        RNS.log(f"ICN: Published {name} ({len(content)} bytes){suffix}")
+
+    def issue_capability(
+        self,
+        prefix_labels: list[str],
+        consumer: RNS.Identity,
+        ttl_seconds: int = 0,
+    ) -> access.Capability:
+        """Mint a capability letting ``consumer`` read a restricted prefix.
+
+        ``prefix_labels`` are the labels under our namespace (e.g. ``["private"]``
+        for ``/<us>/private``). Must match a configured access rule that lists the
+        consumer. Signed with our signing identity so clients verify it like any
+        producer signature.
+        """
+        prefix = Name(self.rns_addr, [lbl.encode() for lbl in prefix_labels])
+        return self._access.issue_capability(
+            prefix, consumer, self.signing_identity.sign, ttl_seconds
+        )
 
     def publish_manifest(self) -> None:
         """Build manifest from CS and cache it."""

@@ -21,10 +21,14 @@ RNS encrypted Links.
 > signs a revocation that cascades to every key it delegated). Chain +
 > revocations travel as a self-verifying bundle served at `/<producer>/_rotation`,
 > so a client can fetch a producer's authorized keys over the mesh and verify
-> them offline. Access control (Phase 3.3) is the main remaining work; human-
-> readable name resolution (petnames/TOFU) is skipped by design — a global
-> human-meaningful namespace doesn't fit an offline-first mesh, and a local
-> petname map belongs to the application layer with no protocol change.
+> them offline. Access control (Phase 3.3) has landed: a producer can restrict a
+> name prefix to specific consumers, content under it is encrypted with a key
+> derived from the producer's identity (caches still store and relay opaque
+> ciphertext), and authorized consumers read it via a producer-signed capability
+> that carries the content key wrapped to their RNS identity. Phase 3 is
+> complete; human-readable name resolution (petnames/TOFU) is skipped by design —
+> a global human-meaningful namespace doesn't fit an offline-first mesh, and a
+> local petname map belongs to the application layer with no protocol change.
 
 ## How it works
 

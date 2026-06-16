@@ -51,6 +51,14 @@ reject_rollback = false
 # over the mesh on demand via ICNClient.fetch_rotation_bundle. Default: none.
 # rotation_chains = ["producers/acme.bundle"]
 
+# Security: access control. Capability files (rns_icn.access) grant this client
+# read access to a producer's restricted (encrypted) prefixes. Each capability
+# is signed by the producer and carries the content key wrapped to this client's
+# identity; the client verifies the signature, unwraps the key, and transparently
+# decrypts matching Data after fetch. Paths are relative to this config file.
+# Default: none.
+# capabilities = ["caps/acme-private.cap"]
+
 # Logging
 log_level = "INFO"
 log_json = false
@@ -81,6 +89,17 @@ role = "ORIGIN"
 # authorized signing keys (and revocations) without out-of-band file exchange.
 # Must anchor to this server's own identity. Default: don't publish a bundle.
 # rotation_chain_path = "/etc/rns-icn/acme.bundle"
+
+# Access control: per-prefix ACLs. Each rule restricts a name prefix to a set of
+# consumer identity hashes. Content published under a restricted prefix is
+# encrypted at publish with a key derived from this server's identity + prefix
+# (caches still store/relay opaque ciphertext); authorized consumers read it via
+# a capability minted with ICNServer.issue_capability. prefix = label path under
+# this server's namespace; consumers = 32-char hex consumer identity hashes.
+# Omit entirely to keep all content public (no encryption). Example:
+# [[server.access_rules]]
+# prefix = ["private"]
+# consumers = ["11111111111111111111111111111111"]
 
 # Announce settings
 announce_interval = 30.0

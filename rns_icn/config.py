@@ -29,6 +29,19 @@ class KnownPeer:
 
 
 @dataclass
+class AccessRuleConfig:
+    """Producer-side ACL entry: a name prefix and who may read it.
+
+    ``prefix`` is the label path under this producer's namespace (the producer
+    address is prepended by the server). ``consumers`` are 32-char hex consumer
+    identity hashes allowed to read content under the prefix.
+    """
+
+    prefix: List[str]
+    consumers: List[str] = field(default_factory=list)
+
+
+@dataclass
 class ClientConfig:
     """ICN Client configuration."""
 
@@ -57,6 +70,11 @@ class ClientConfig:
     # them and accepts Data signed by any key the chain authorizes, so a
     # producer can rotate its signing key without breaking verification.
     rotation_chains: List[str] = field(default_factory=list)
+    # Paths to capability files (rns_icn.access.Capability) granting this client
+    # read access to restricted prefixes. Each carries a CEK wrapped to this
+    # client's identity; the client verifies the producer's signature, unwraps
+    # the CEK, and decrypts matching encrypted Data. Default: none.
+    capabilities: List[str] = field(default_factory=list)
     log_level: str = "INFO"
     log_json: bool = False
 
@@ -87,6 +105,11 @@ class ServerConfig:
     # authorized signing keys (and revocations) over the mesh. None = don't
     # publish a bundle.
     rotation_chain_path: Optional[str] = None
+    # Per-prefix access control (rns_icn.access). Each rule restricts a name
+    # prefix to a set of consumer identities; the origin encrypts content under
+    # restricted prefixes at publish and issues capabilities to the listed
+    # consumers. Empty = everything public (no encryption).
+    access_rules: List[AccessRuleConfig] = field(default_factory=list)
     announce_interval: float = 30.0
     reannounce_on_link: bool = True
     cs_max_entries: int = 10000
@@ -161,6 +184,9 @@ def _dict_to_client_config(data: Dict[str, Any], base_path: str) -> ClientConfig
         rotation_chains=[
             str((base_dir / p).expanduser()) for p in data.get("rotation_chains", [])
         ],
+        capabilities=[
+            str((base_dir / p).expanduser()) for p in data.get("capabilities", [])
+        ],
         log_level=data.get("log_level", "INFO"),
         log_json=data.get("log_json", False),
     )
@@ -206,6 +232,14 @@ def _dict_to_server_config(data: Dict[str, Any], base_path: str) -> ServerConfig
     if rotation_chain_path:
         rotation_chain_path = str((base_dir / rotation_chain_path).expanduser())
 
+    access_rules = [
+        AccessRuleConfig(
+            prefix=list(r["prefix"]),
+            consumers=list(r.get("consumers", [])),
+        )
+        for r in data.get("access_rules", [])
+    ]
+
     return ServerConfig(
         identity_path=identity_path,
         app_name=data.get("app_name", "icn"),
@@ -215,6 +249,7 @@ def _dict_to_server_config(data: Dict[str, Any], base_path: str) -> ServerConfig
         role=role,
         signing_identity_path=signing_identity_path,
         rotation_chain_path=rotation_chain_path,
+        access_rules=access_rules,
         announce_interval=data.get("announce_interval", 30.0),
         reannounce_on_link=data.get("reannounce_on_link", True),
         cs_max_entries=data.get("cs_max_entries", 10000),

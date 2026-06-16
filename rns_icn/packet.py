@@ -263,6 +263,11 @@ class DataMetadata:
     # consumer detect a cache/relay replaying a stale-but-validly-signed version
     # (rollback). None on unsigned Data and on pre-3.1 signed Data.
     signed_at: Optional[int] = None
+    # True when ``content`` is ciphertext for a restricted prefix (Phase 3.3).
+    # Bound into the signed envelope so a relay cannot flip it; a consumer with a
+    # capability for the name decrypts it (see rns_icn.access). Caches store and
+    # relay the opaque ciphertext untouched.
+    encrypted: bool = False
 
     def to_bytes(self) -> bytes:
         flags = 0
@@ -276,6 +281,8 @@ class DataMetadata:
             flags |= 0x08
         if self.signed_at is not None:
             flags |= 0x10
+        if self.encrypted:
+            flags |= 0x20
         buf = bytearray([flags])
         if self.content_hash is not None:
             buf.extend(self.content_hash)
@@ -325,9 +332,10 @@ class DataMetadata:
                 raise DataError("buffer too short for signed_at")
             signed_at = struct.unpack(">Q", data[pos:pos + 8])[0]
             pos += 8
+        encrypted = bool(flags & 0x20)
         return cls(content_hash=content_hash, sequence=sequence,
                    freshness=freshness, freshness_period=freshness_period,
-                   signed_at=signed_at)
+                   signed_at=signed_at, encrypted=encrypted)
 
 
 # ── Data ──
@@ -394,6 +402,12 @@ class Data:
         if self.metadata.signed_at is not None:
             h.update(b"\x02")
             h.update(struct.pack(">Q", self.metadata.signed_at))
+        # Bind the encrypted flag so a relay can't strip it (making a consumer
+        # treat ciphertext as plaintext) or set it. Domain-tagged and only added
+        # when true, so unencrypted pre-3.3 signatures still verify.
+        if self.metadata.encrypted:
+            h.update(b"\x03")
+            h.update(b"\x01")
         return h.digest()
 
     def sign(
@@ -453,7 +467,8 @@ class Data:
                     or self.metadata.sequence is not None
                     or not self.metadata.freshness.fresh
                     or self.metadata.freshness_period is not None
-                    or self.metadata.signed_at is not None)
+                    or self.metadata.signed_at is not None
+                    or self.metadata.encrypted)
         has_sig = self.signature is not None
 
         metadata_bytes = self.metadata.to_bytes() if has_meta else b""
