@@ -51,6 +51,16 @@ class Forwarder:
     def add_route(self, prefix: Name, face_id: FaceId, cost: int = 10) -> None:
         self.fib.insert(prefix, face_id, cost)
 
+    def withdraw_face(self, face_id: FaceId) -> None:
+        """Tear down a face: withdraw all its FIB routes and unregister it.
+
+        Called when a link closes so a dead next-hop stops being a black hole —
+        Interests for its prefixes either fall through to a backup face
+        (multi-path) or cleanly hit NO_ROUTE instead of timing out forever.
+        """
+        self.fib.remove_all_for_face(face_id)
+        self.unregister_face(face_id)
+
     async def express(self, interest: Interest, in_face: FaceId) -> Data | None:
         """Express an Interest — main consumer API. Returns Data or None."""
         # 1. Loop detection
@@ -92,22 +102,53 @@ class Forwarder:
                 return None
 
         if decision == StrategyDecision.FORWARD_TO:
-            if target_face is None:
+            out_faces = self._failover_candidates(fib_faces, target_face)
+            if not out_faces:
                 return None
-            return await self._forward(interest, in_face, target_face)
+            return await self._forward(interest, in_face, out_faces)
 
         return None
 
-    async def _forward(self, interest: Interest, in_face: FaceId,
-                       out_face_id: FaceId) -> Data | None:
-        name = interest.name
+    def _failover_candidates(
+        self, fib_faces: list[tuple[FaceId, int]], primary: FaceId | None
+    ) -> list[FaceId]:
+        """Ordered next-hops to try for one Interest (primary then backups).
 
+        Asks the strategy for its cost-ordered, backoff-filtered face list so a
+        timeout on the primary falls through to a backup. Strategies that don't
+        expose ``usable_faces`` keep single-path behaviour via the primary.
+        """
+        usable = getattr(self.strategy, "usable_faces", None)
+        if usable is not None:
+            faces = usable(fib_faces)
+            if faces:
+                return faces
+        return [primary] if primary is not None else []
+
+    async def _forward(self, interest: Interest, in_face: FaceId,
+                       out_faces: list[FaceId]) -> Data | None:
+        """Forward an Interest, trying each next-hop in order until one answers.
+
+        Hop-limit is enforced once per Interest here (not per next-hop): trying a
+        backup is the same logical hop, so a single forward decision costs one hop
+        regardless of how many content-equivalent peers we fall through.
+        """
         # Hop-limit enforcement (defence-in-depth beyond nonce loop detection).
         # An exhausted Interest is dropped rather than forwarded; CS/PIT
         # satisfaction already happened in express() before we got here.
         if interest.hop_limit <= 0:
             return None
         interest.hop_limit -= 1
+
+        for out_face_id in out_faces:
+            result = await self._forward_one(interest, in_face, out_face_id)
+            if result is not None:
+                return result
+        return None
+
+    async def _forward_one(self, interest: Interest, in_face: FaceId,
+                           out_face_id: FaceId) -> Data | None:
+        name = interest.name
 
         self.pit.insert_or_aggregate(name, in_face, interest, interest.lifetime_ms)
         self.pit.set_out_face(name, out_face_id)
@@ -169,7 +210,7 @@ class Forwarder:
 
         async def _run() -> None:
             try:
-                await self._forward(revalidate, in_face, out_face_id)
+                await self._forward(revalidate, in_face, [out_face_id])
             except Exception:
                 logger.warning(
                     "background revalidation failed for %s", revalidate.name, exc_info=True

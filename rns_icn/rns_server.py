@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 import RNS
@@ -163,6 +164,11 @@ class ICNServer(BaseICNServer):
 
         # Peer discovery
         self.discovery: PeerDiscoveryManager = PeerDiscoveryManager(self)
+
+        # Optional hook fired (on the event loop) after a face's routes are
+        # withdrawn on link close. The router sets this to re-establish the link
+        # and re-install the route (dynamic FIB re-install on reconnect).
+        self.on_face_closed: Callable[[FaceId], None] | None = None
 
         # Compute feature bitmask for capability exchange
         self._features: int = self._compute_features()
@@ -362,7 +368,9 @@ class ICNServer(BaseICNServer):
         return face.id()
 
     def _make_link_face(self, face_id: FaceId, link: RNS.Link) -> LinkFace:
-        link_face = LinkFace(face_id, link, loop=self._loop)
+        link_face = LinkFace(
+            face_id, link, loop=self._loop, on_closed=self._on_face_closed
+        )
         self.forwarder.register_face(link_face)
         self._faces[face_id] = link_face
 
@@ -376,6 +384,29 @@ class ICNServer(BaseICNServer):
             )
 
         return link_face
+
+    def _on_face_closed(self, face_id: FaceId) -> None:
+        """LinkFace closed-callback hook — runs on the RNS thread.
+
+        Schedules FIB/face cleanup onto the event loop so a dropped link stops
+        being a black-hole route. RNS already detects link death via keepalive,
+        so this is the right event to ride rather than polling for liveness.
+        """
+        if self._loop is None:
+            return
+        self._loop.call_soon_threadsafe(self._cleanup_closed_face, face_id)
+
+    def _cleanup_closed_face(self, face_id: FaceId) -> None:
+        """Withdraw a closed face's routes and drop it (event-loop side)."""
+        self.forwarder.withdraw_face(face_id)
+        self._faces.pop(face_id, None)
+        self.discovery.clear_face(face_id)
+        RNS.log(f"ICN: face #{face_id} closed — FIB routes withdrawn")
+        if self.on_face_closed is not None:
+            try:
+                self.on_face_closed(face_id)
+            except Exception:
+                RNS.log("ICN: on_face_closed hook failed", RNS.LOG_DEBUG)
 
     async def _process_link(self, face_id: FaceId, link_face: LinkFace) -> None:
         recv_queue = link_face._recv_queue

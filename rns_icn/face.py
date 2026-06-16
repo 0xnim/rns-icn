@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -141,7 +142,8 @@ class LinkFace(Face):
     Bridges from RNS's thread-based callback model into asyncio.
     """
 
-    def __init__(self, face_id: FaceId, link: RNS.Link, loop: asyncio.AbstractEventLoop | None = None):
+    def __init__(self, face_id: FaceId, link: RNS.Link, loop: asyncio.AbstractEventLoop | None = None,
+                 on_closed: Callable[[FaceId], None] | None = None):
         from RNS.Channel import ChannelException, MessageBase
 
         class _ICNMessage(MessageBase):
@@ -162,6 +164,7 @@ class LinkFace(Face):
         self._loop = loop or asyncio.get_running_loop()
         self._recv_queue: asyncio.Queue[bytes] = asyncio.Queue()
         self._closed = False
+        self._on_closed_hook = on_closed
         self._ICNMessage = _ICNMessage
         self._channel_exc = ChannelException
 
@@ -182,12 +185,21 @@ class LinkFace(Face):
 
         channel.add_message_handler(_on_channel_message)
 
-        # Handle link close
+        # Handle link close. RNS allows a single closed-callback per Link, so
+        # LinkFace owns it and fans out to an optional owner hook (used by the
+        # server to withdraw this face's FIB routes — see ICNServer).
         def _on_closed(link: RNS.Link) -> None:
+            if self._closed:
+                return
             self._closed = True
             self._loop.call_soon_threadsafe(
                 self._recv_queue.put_nowait, b""
             )
+            if self._on_closed_hook is not None:
+                try:
+                    self._on_closed_hook(self._id)
+                except Exception:
+                    logger.debug("LinkFace on_closed hook failed", exc_info=True)
 
         link.set_link_closed_callback(_on_closed)
 

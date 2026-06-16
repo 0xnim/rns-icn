@@ -112,42 +112,99 @@ async def server_main() -> int:
     return 0
 
 
-async def _install_peer_routes(server: ICNServer, config) -> list[tuple[str, Name]]:
-    """Connect to each known peer and install a FIB route for its content.
+def _peer_route_cost(dest_hash_hex: str, default: int = 10) -> int:
+    """Derive FIB cost from RNS transport hop count when known.
+
+    RNS already tracks hops-to-destination in its path table, so reusing it
+    makes primary/backup ordering reflect real mesh distance instead of a
+    constant. Falls back to ``default`` when no path is known yet.
+    """
+    import RNS
+    try:
+        hops = RNS.Transport.hops_to(bytes.fromhex(dest_hash_hex))
+    except Exception:
+        return default
+    if isinstance(hops, int) and 0 < hops < 128:
+        return hops * 10
+    return default
+
+
+async def _install_peer_route(server: ICNServer, peer) -> tuple[str, Name] | None:
+    """Connect to one peer and install (or refresh) its FIB route.
 
     ICN names are self-certifying: content under ``/<peer-identity-hash>/...``
-    is authoritative to that peer. So for each reachable known peer we add a
-    route keyed by the peer's 16-byte identity hash pointing at the Link face
-    we just established. Interests for that prefix are then forwarded upstream
-    by the Forwarder on a CS miss (reverse-path Data is cached at this hop).
+    is authoritative to that peer, so the route is keyed by the peer's identity
+    hash pointing at the Link face. ``connect()`` uses the RNS *destination*
+    hash while the FIB prefix is the *identity* hash — they differ, so the
+    peer's ``identity_path`` is required to derive the routable prefix.
 
-    Note: ``connect()`` uses the RNS *destination* hash, while the FIB prefix
-    is the *identity* hash — these differ, so a peer's ``identity_path`` is
-    required to derive the routable prefix.
+    Idempotent: ``connect`` reuses an existing link via the LinkPool and
+    ``add_route`` upserts, so this is safe to call again on reconnect.
     """
     import RNS
 
+    face_id = await server.connect(peer.destination_hash)
+    if face_id is None:
+        print(f"  ! Could not link to peer '{peer.name}' ({peer.destination_hash[:16]})",
+              file=sys.stderr)
+        return None
+    if not peer.identity_path:
+        print(f"  ! Peer '{peer.name}' has no identity_path; cannot install route",
+              file=sys.stderr)
+        return None
+    identity = RNS.Identity.from_file(peer.identity_path)
+    if identity is None:
+        print(f"  ! Could not load identity for peer '{peer.name}' from {peer.identity_path}",
+              file=sys.stderr)
+        return None
+    prefix = Name(identity.hash)
+    cost = _peer_route_cost(peer.destination_hash)
+    server.forwarder.add_route(prefix, face_id, cost=cost)
+    print(f"  Route: /{identity.hash.hex()} → {peer.name} (face #{face_id}, cost {cost})")
+    return (peer.name, prefix)
+
+
+async def _install_peer_routes(server: ICNServer, config) -> list[tuple[str, Name]]:
+    """Connect to each known peer and install a FIB route for its content.
+
+    Interests for an installed prefix are forwarded upstream by the Forwarder on
+    a CS miss (reverse-path Data is cached at this hop).
+    """
     installed: list[tuple[str, Name]] = []
     for peer in config.known_peers:
-        face_id = await server.connect(peer.destination_hash)
-        if face_id is None:
-            print(f"  ! Could not link to peer '{peer.name}' ({peer.destination_hash[:16]})",
-                  file=sys.stderr)
-            continue
-        if not peer.identity_path:
-            print(f"  ! Peer '{peer.name}' has no identity_path; cannot install route",
-                  file=sys.stderr)
-            continue
-        identity = RNS.Identity.from_file(peer.identity_path)
-        if identity is None:
-            print(f"  ! Could not load identity for peer '{peer.name}' from {peer.identity_path}",
-                  file=sys.stderr)
-            continue
-        prefix = Name(identity.hash)
-        server.forwarder.add_route(prefix, face_id, cost=10)
-        installed.append((peer.name, prefix))
-        print(f"  Route: /{identity.hash.hex()} → {peer.name} (face #{face_id})")
+        result = await _install_peer_route(server, peer)
+        if result is not None:
+            installed.append(result)
     return installed
+
+
+def _wire_route_reinstall(server: ICNServer, config) -> None:
+    """Re-install an upstream route when its peer re-announces after a drop.
+
+    Dynamic FIB re-install, event-driven off RNS announces: when a link closes,
+    the server withdraws the route and clears the peer's face. The peer keeps
+    announcing periodically; the discovery layer fires this callback on the next
+    announce (only while disconnected), and we re-establish + re-install. This
+    rides RNS's own keepalive (for the drop) and announce cadence (for recovery)
+    instead of polling.
+    """
+    peers_by_dest = {p.destination_hash: p for p in config.known_peers}
+
+    def _on_rediscovered(peer_hash: str, info) -> None:
+        peer = peers_by_dest.get(peer_hash)
+        if peer is None:
+            return  # not a configured upstream
+
+        async def _run() -> None:
+            result = await _install_peer_route(server, peer)
+            if result is not None:
+                print(f"  Reconnect: re-installed route for {peer.name}")
+
+        # Discovery callbacks fire on the RNS thread → hop onto the event loop.
+        if server._loop is not None:
+            asyncio.run_coroutine_threadsafe(_run(), server._loop)
+
+    server.discovery.add_callback(_on_rediscovered)
 
 
 async def router_main() -> int:
@@ -190,6 +247,8 @@ async def router_main() -> int:
             print("  ! No known_peers configured — router has no upstream routes",
                   file=sys.stderr)
         installed = await _install_peer_routes(server, config)
+        # Withdraw routes on link drop and re-install on the peer's next announce.
+        _wire_route_reinstall(server, config)
         print(f"Ready. {len(installed)} upstream route(s) installed. Press Ctrl+C to stop.")
 
         if config.http_enabled:

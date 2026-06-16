@@ -13,9 +13,9 @@ Phases 1 and 2 are complete; Phase 4.1 (protocol versioning) is done and other p
 | Component | Status | Gaps |
 |-----------|--------|------|
 | Client fetch | `ICNClient` with retry + timeout config | — |
-| Link establishment | `LinkPool` w/ reuse, health, announce injection | reconnect is on-use, not proactive |
+| Link establishment | `LinkPool` w/ reuse, health, announce injection; routes re-installed on peer re-announce after a drop | — |
 | Content store | SQLite + TTL + LRU + crash recovery | — |
-| Forwarding | Multi-hop (FIB/PIT/CS); `icn-router` binary; **cache coherency** (freshness period, stale-while-revalidate, signed invalidation) | no multi-path |
+| Forwarding | Multi-hop (FIB/PIT/CS); `icn-router` binary; **cache coherency** (freshness period, stale-while-revalidate, signed invalidation); **multi-path primary/backup failover**; **dynamic FIB** (withdrawal on link close, re-install on re-announce) | — |
 | Naming | /hash/label, content-hash verified, **Ed25519 producer signatures** (sequence + timestamp authenticated; client rollback protection); **per-prefix access control** (encrypted content + capability tokens) | petname/TOFU resolution and key rotation/revocation removed by design |
 | API | Per-packet wire version (`[type][version]`) + capability exchange; unknown generation rejected cleanly | — |
 | Operations | TOML config, JSON logs, health + metrics | — |
@@ -73,8 +73,19 @@ Phases 1 and 2 are complete; Phase 4.1 (protocol versioning) is done and other p
 ### 2.3 Router Mesh Formation
 - [x] Router discovery via RNS announces (`rns_icn/peer_discovery.py`)
 - [x] Route installation from configured peers (`icn-router` derives FIB prefix from peer identity)
-- [ ] Dynamic FIB updates (prefix withdrawal/re-announce; routes re-installed on link reconnect)
-- [ ] Multi-path support (ECMP or primary/backup)
+- [x] Dynamic FIB updates: a face's routes are **withdrawn** when its link
+  closes (`Forwarder.withdraw_face` / `Fib.remove_all_for_face`, driven by the
+  `LinkFace` close hook → `ICNServer._cleanup_closed_face`), so a dead next-hop
+  stops black-holing Interests. Routes are **re-installed** when the peer
+  re-announces while disconnected: `PeerDiscoveryManager` surfaces that as a
+  reconnect signal and `icn-router` re-establishes the link + reinstalls the
+  route (`_wire_route_reinstall`). Rides RNS keepalive (close) and announce
+  cadence (recovery) rather than polling.
+- [x] Multi-path support (**primary/backup failover**): the FIB holds multiple
+  cost-ordered faces per prefix; on a forward timeout the `Forwarder` falls
+  through to the next usable face (`BestRoute.usable_faces`), hop-limit
+  decremented once across the attempt. FIB cost MAY be derived from the RNS
+  transport hop count. (ECMP/parallel left as a non-goal.)
 
 ### 2.4 Cache Coherency
 - [x] Cache validation: Data carries a `freshness_period` (`DataMetadata`); the
@@ -91,7 +102,7 @@ Phases 1 and 2 are complete; Phase 4.1 (protocol versioning) is done and other p
   suppression (`ContentStore.invalidate`, `ICNServer.handle_invalidate`/
   `invalidate`). Mesh-wide flood hardening deferred.
 
-**Deliverable:** ✅ `icn-router` binary. Client ↔ Router ↔ Server works over real RNS and content caches at the hop — proven end-to-end by `tests/test_integration.py::TestRNSMultiHop` (three processes, three Reticulum instances over localhost TCP). Cache coherency (§2.4) has landed. **Residual for full Phase 2:** dynamic FIB updates / multi-path (§2.3).
+**Deliverable:** ✅ `icn-router` binary. Client ↔ Router ↔ Server works over real RNS and content caches at the hop — proven end-to-end by `tests/test_integration.py::TestRNSMultiHop` (three processes, three Reticulum instances over localhost TCP). Cache coherency (§2.4), dynamic FIB updates, and multi-path failover (§2.3) have all landed. **Phase 2 complete.**
 
 ---
 

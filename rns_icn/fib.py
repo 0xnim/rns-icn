@@ -45,6 +45,24 @@ class Fib:
     def remove_prefix(self, prefix: Name) -> None:
         self._entries = [e for e in self._entries if not e.prefix.starts_with(prefix)]
 
+    def remove_all_for_face(self, face: FaceId) -> int:
+        """Withdraw a face from every prefix (e.g. on link teardown).
+
+        Drops the face from each entry and removes entries left with no faces.
+        Returns the number of prefixes the face was withdrawn from.
+        """
+        withdrawn = 0
+        new_entries: list[FibEntry] = []
+        for entry in self._entries:
+            before = len(entry.faces)
+            entry.faces = [(f, c) for f, c in entry.faces if f != face]
+            if len(entry.faces) != before:
+                withdrawn += 1
+            if entry.faces:
+                new_entries.append(entry)
+        self._entries = new_entries
+        return withdrawn
+
     def lookup(self, name: Name) -> list[tuple[FaceId, int]] | None:
         best: FibEntry | None = None
         for entry in self._entries:
