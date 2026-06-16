@@ -197,6 +197,7 @@ def _client(require_signature: bool, rotation_store=None):
     client = object.__new__(_ClientForPolicy)
     client.config = ClientConfig(require_signature=require_signature)
     client._rotation_store = rotation_store or {}
+    client._revocation_store = {}
     return client
 
 
@@ -212,6 +213,7 @@ def _rollback_client(reject_rollback: bool):
     client.config = ClientConfig(reject_rollback=reject_rollback)
     client._seen_signed_key = {}
     client._rotation_store = {}
+    client._revocation_store = {}
     return client
 
 
@@ -350,6 +352,7 @@ def _rotation_client(anchor, *gens):
     client = object.__new__(_ClientForPolicy)
     client.config = ClientConfig(require_signature=True)
     client._rotation_store = {anchor.hash: certs}
+    client._revocation_store = {}
     return client
 
 
@@ -388,6 +391,31 @@ def test_chain_consulted_without_recall(monkeypatch):
     anchor, new = RNS.Identity(), RNS.Identity()
     client = _rotation_client(anchor, new)
     data = Data.new(name=Name(anchor.hash, [b"doc"]), content=b"x").sign(new.sign)
+    assert client._check_signature(data)[0]
+
+
+# ── Key revocation (Phase 3.4: _check_signature honours revocations) ──
+
+from rns_icn.rotation import Revocation  # noqa: E402
+
+
+def test_revoked_key_signature_rejected():
+    """A revoked delegated key no longer verifies even though it's in the chain."""
+    anchor, compromised = RNS.Identity(), RNS.Identity()
+    client = _rotation_client(anchor, compromised)
+    rev = Revocation.create(anchor.hash, compromised.get_public_key(), anchor)
+    client._revocation_store = {anchor.hash: [rev]}
+    data = Data.new(name=Name(anchor.hash, [b"doc"]), content=b"x").sign(compromised.sign)
+    ok, err = client._check_signature(data)
+    assert not ok and err is not None
+
+
+def test_anchor_still_valid_after_revoking_delegate():
+    anchor, compromised = RNS.Identity(), RNS.Identity()
+    client = _rotation_client(anchor, compromised)
+    rev = Revocation.create(anchor.hash, compromised.get_public_key(), anchor)
+    client._revocation_store = {anchor.hash: [rev]}
+    data = Data.new(name=Name(anchor.hash, [b"doc"]), content=b"x").sign(anchor.sign)
     assert client._check_signature(data)[0]
 
 

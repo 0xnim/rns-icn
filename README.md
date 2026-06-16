@@ -17,9 +17,12 @@ RNS encrypted Links.
 > signing timestamp now bound into the signed envelope so clients can reject a
 > relay replaying a stale-but-validly-signed version (rollback). Producers can
 > rotate their signing key via a self-certifying chain of signed delegation
-> certificates (`rns_icn/rotation.py`), so clients keep verifying across a key
-> change without trusting the mesh. Access control and name resolution (Phase
-> 3.3/3.4) are the main remaining work.
+> certificates (`rns_icn/rotation.py`), and revoke a compromised key (the anchor
+> signs a revocation that cascades to every key it delegated). Chain +
+> revocations travel as a self-verifying bundle served at `/<producer>/_rotation`,
+> so a client can fetch a producer's authorized keys over the mesh and verify
+> them offline. Access control and the rest of name resolution (Phase 3.3/3.4:
+> petnames, TOFU) are the main remaining work.
 
 ## How it works
 

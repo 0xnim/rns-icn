@@ -42,6 +42,8 @@ class ICNClient:
         # producer addr → its key-rotation chain (rns_icn.rotation), loaded from
         # config.rotation_chains at start(); empty means "no rotation known".
         self._rotation_store: dict[bytes, list[rotation.KeyRotation]] = {}
+        # producer addr → its key revocations (paired with the chain above).
+        self._revocation_store: dict[bytes, list[rotation.Revocation]] = {}
 
     async def __aenter__(self) -> "ICNClient":
         return await self.start()
@@ -87,23 +89,26 @@ class ICNClient:
         return self
 
     def _load_rotation_chains(self) -> None:
-        """Load and validate configured key-rotation chains, keyed by producer.
+        """Load and validate configured rotation bundles, keyed by producer.
 
-        Each file's anchor (the first link's signer key) determines the producer
-        address it applies to. A malformed or unverifiable chain is skipped with
-        a warning rather than failing startup.
+        Each file holds one producer's rotation chain plus any revocations (a
+        legacy chain-only file loads as a bundle with no revocations). The
+        anchor (the first link's signer key) determines the producer address it
+        applies to. A malformed or unverifiable bundle is skipped with a warning
+        rather than failing startup.
         """
         for path in self.config.rotation_chains:
             try:
-                certs = rotation.load_rotation_chain(path)
-                if not certs:
+                bundle = rotation.load_rotation_bundle(path)
+                if not bundle.certs:
                     continue
-                producer = rotation.addr_of_public_key(certs[0].prev_public_key)
-                # Validate up front so a bad chain never reaches verification.
-                rotation.verify_rotation_chain(producer, certs)
-                self._rotation_store[producer] = certs
+                producer = rotation.addr_of_public_key(bundle.certs[0].prev_public_key)
+                # Validate up front so a bad bundle never reaches verification.
+                bundle.verify(producer)
+                self._rotation_store[producer] = bundle.certs
+                self._revocation_store[producer] = bundle.revocations
             except Exception as e:
-                RNS.log(f"ICN: skipping invalid rotation chain {path}: {e}", RNS.LOG_WARNING)
+                RNS.log(f"ICN: skipping invalid rotation bundle {path}: {e}", RNS.LOG_WARNING)
 
     async def shutdown(self) -> None:
         """Gracefully stop link pool and RNS."""
@@ -118,8 +123,15 @@ class ICNClient:
         peer_hash: bytes,
         timeout: Optional[float] = None,
         max_retries: Optional[int] = None,
+        apply_policy: bool = True,
     ) -> Optional[Data]:
-        """Express Interest to peer, wait for Data with retry/backoff."""
+        """Express Interest to peer, wait for Data with retry/backoff.
+
+        ``apply_policy`` runs the signature and rollback checks (the default).
+        It is set False only for fetching a producer's self-verifying rotation
+        bundle, which is authenticated by its own contents rather than a
+        producer signature (see :meth:`fetch_rotation_bundle`).
+        """
         if self._link_pool is None or self._forwarder is None:
             raise RuntimeError("Client not started. Call start() or use as context manager.")
         timeout = timeout or self.config.fetch_timeout
@@ -149,14 +161,15 @@ class ICNClient:
                 )
 
                 if result and result.verify_content_hash():
-                    sig_ok, sig_err = self._check_signature(result)
-                    if not sig_ok:
-                        last_error = sig_err
-                        continue
-                    rb_ok, rb_err = self._check_rollback(result)
-                    if not rb_ok:
-                        last_error = rb_err
-                        continue
+                    if apply_policy:
+                        sig_ok, sig_err = self._check_signature(result)
+                        if not sig_ok:
+                            last_error = sig_err
+                            continue
+                        rb_ok, rb_err = self._check_rollback(result)
+                        if not rb_ok:
+                            last_error = rb_err
+                            continue
                     # Record successful fetch latency
                     fetch_latency = time.time() - fetch_start
                     metrics.record_fetch(fetch_latency, success=True)
@@ -200,9 +213,10 @@ class ICNClient:
             # signing keys is the chain's authorized keys (self-certifying).
             certs = self._rotation_store.get(data.name.rns_addr)
             if certs:
+                revocations = self._revocation_store.get(data.name.rns_addr)
                 try:
                     validators = rotation.authorized_validators(
-                        data.name.rns_addr, certs
+                        data.name.rns_addr, certs, revocations
                     )
                 except rotation.RotationError as e:
                     return False, ValueError(f"invalid rotation chain: {e}")
@@ -255,6 +269,36 @@ class ICNClient:
         if previous is None or key > previous:
             self._seen_signed_key[name_key] = key
         return True, None
+
+    async def fetch_rotation_bundle(
+        self,
+        producer_addr: bytes,
+        peer_hash: bytes,
+        timeout: Optional[float] = None,
+    ) -> Optional[list[bytes]]:
+        """Fetch a producer's rotation bundle over the mesh and load it.
+
+        Retrieves the self-verifying bundle published at
+        ``/<producer>/_rotation``, validates that it anchors to
+        ``producer_addr`` (so a relay cannot graft a foreign chain onto the
+        name), and installs its chain + revocations into the local stores so
+        subsequent :meth:`fetch` calls verify rotated/revoked keys offline.
+
+        The bundle carries no producer signature — it authenticates itself — so
+        the fetch deliberately skips the signature/rollback policy. Returns the
+        authorized public keys, or ``None`` if nothing was retrieved. Raises
+        :class:`rotation.RotationError` if the bundle is malformed or does not
+        anchor to ``producer_addr``.
+        """
+        name = rotation.rotation_name(producer_addr)
+        data = await self.fetch(name, peer_hash, timeout, apply_policy=False)
+        if data is None:
+            return None
+        bundle = rotation.RotationBundle.from_bytes(data.content)
+        keys = bundle.verify(producer_addr)  # raises RotationError if invalid
+        self._rotation_store[producer_addr] = bundle.certs
+        self._revocation_store[producer_addr] = bundle.revocations
+        return keys
 
     async def fetch_manifest(
         self,

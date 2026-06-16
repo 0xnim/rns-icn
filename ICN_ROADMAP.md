@@ -8,7 +8,7 @@
 
 ## Current State
 
-Phases 1 and 2 are complete; parts of Phase 4 (capability negotiation, pub/sub, chunked transfer) landed early. Phase 3.1 (signed manifests, authenticated sequence/timestamp, key rotation) and 3.2 (per-packet/per-chunk producer signatures) are now implemented; access control (3.3) and name resolution (3.4) remain.
+Phases 1 and 2 are complete; parts of Phase 4 (capability negotiation, pub/sub, chunked transfer) landed early. Phase 3.1 (signed manifests, authenticated sequence/timestamp, key rotation) and 3.2 (per-packet/per-chunk producer signatures) are implemented, as is the key-management half of 3.4 (revocation + mesh distribution of rotation bundles); access control (3.3) and the rest of name resolution (3.4: petnames, TOFU) remain.
 
 | Component | Status | Gaps |
 |-----------|--------|------|
@@ -16,7 +16,7 @@ Phases 1 and 2 are complete; parts of Phase 4 (capability negotiation, pub/sub, 
 | Link establishment | `LinkPool` w/ reuse, health, announce injection | reconnect is on-use, not proactive |
 | Content store | SQLite + TTL + LRU + crash recovery | — |
 | Forwarding | Multi-hop (FIB/PIT/CS); `icn-router` binary; **cache coherency** (freshness period, stale-while-revalidate, signed invalidation) | no multi-path |
-| Naming | /hash/label, content-hash verified, **Ed25519 producer signatures** (sequence + timestamp authenticated; client rollback protection; **key rotation** via signed delegation chains) | access control + name resolution (Phase 3.3/3.4) |
+| Naming | /hash/label, content-hash verified, **Ed25519 producer signatures** (sequence + timestamp authenticated; client rollback protection; **key rotation + anchor-signed revocation** via signed delegation chains, distributed over the mesh as self-verifying bundles) | access control + petname/TOFU resolution (Phase 3.3/3.4) |
 | API | Versioned via capability exchange | per-packet version not in Interest/Data |
 | Operations | TOML config, JSON logs, health + metrics | — |
 
@@ -112,8 +112,7 @@ Phases 1 and 2 are complete; parts of Phase 4 (capability negotiation, pub/sub, 
   key, and an origin can sign with a delegated key via
   `ServerConfig.signing_identity_path` while keeping its anchor namespace.
   Delivered as key *continuity* (old generations still verify, caches survive a
-  rotation); chain distribution over the mesh and *revocation* are deferred to
-  §3.4.
+  rotation); chain distribution over the mesh and *revocation* landed in §3.4.
 - [x] Sequence/timestamp inside the signed envelope: `signed_hash` now binds
   `name + content + content_hash + sequence + signed_at` (the latter two
   domain-tagged and appended, so pre-3.1 signatures still verify). `Data.sign`
@@ -136,9 +135,17 @@ Phases 1 and 2 are complete; parts of Phase 4 (capability negotiation, pub/sub, 
 ### 3.4 Name Resolution
 - [ ] Human-readable names → producer hash (Petname / DNS-like)
 - [ ] Trust-on-first-use (TOFU) for producers
-- [ ] Revocation / key expiry (key *rotation* landed in §3.1; revocation —
-  shrinking the authorized-key set when a key is compromised — and mesh
-  distribution of rotation chains belong here)
+- [x] Revocation / key expiry: a `rotation.Revocation` (signed by the namespace
+  anchor — the root of trust) removes a compromised key *and every key it
+  transitively delegated* (cascade) from the authorized set, the shrinking
+  counterpart to rotation's widening. Plus mesh distribution: chain + revocations
+  travel together as a `RotationBundle` served as self-verifying Data at the
+  reserved name `/<producer>/_rotation`; an origin publishes it
+  (`ServerConfig.rotation_chain_path` → `ICNServer.publish_rotation_bundle`) and
+  a client fetches + validates + installs it offline
+  (`ICNClient.fetch_rotation_bundle`, anchoring the bundle to the requested
+  producer so a relay can't graft a foreign chain). The bundle wire format is a
+  backward-compatible superset of the bare chain.
 
 **Deliverable:** Signed manifests + data, producer auth, encrypted content option, name resolution.
 

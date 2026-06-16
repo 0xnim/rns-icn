@@ -41,12 +41,15 @@ require_signature = false
 # Default false (additive rollout).
 reject_rollback = false
 
-# Security: producer key rotation. Each file is a signed delegation chain
-# (rns_icn.rotation) for one producer; the client accepts Data signed by any
-# key the chain authorizes (the anchor or a rotated-to key), so a producer can
-# change its signing key without breaking verification. Paths are relative to
-# this config file. Default: none.
-# rotation_chains = ["producers/acme.chain"]
+# Security: producer key rotation. Each file is a rotation bundle
+# (rns_icn.rotation) for one producer: a signed delegation chain plus any key
+# revocations. The client accepts Data signed by any authorized key (the anchor
+# or a rotated-to key) and rejects keys the producer has revoked, so a producer
+# can change its signing key — or disown a compromised one — without breaking
+# verification. A bare chain file (no revocations) loads fine too. Paths are
+# relative to this config file. The client can also fetch a producer's bundle
+# over the mesh on demand via ICNClient.fetch_rotation_bundle. Default: none.
+# rotation_chains = ["producers/acme.bundle"]
 
 # Logging
 log_level = "INFO"
@@ -71,6 +74,13 @@ role = "ORIGIN"
 # Data with this delegated key. Pair it with a rotation chain (issued by the
 # anchor) so clients still verify. Default: sign with the anchor identity.
 # signing_identity_path = "/etc/rns-icn/signing_identity"
+
+# Key rotation: optional rotation bundle (chain + revocations) to publish over
+# the mesh. When set, the origin serves it as self-verifying Data at the
+# reserved name /<producer>/_rotation, so peers can fetch this producer's
+# authorized signing keys (and revocations) without out-of-band file exchange.
+# Must anchor to this server's own identity. Default: don't publish a bundle.
+# rotation_chain_path = "/etc/rns-icn/acme.bundle"
 
 # Announce settings
 announce_interval = 30.0

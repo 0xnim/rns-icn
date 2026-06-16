@@ -81,6 +81,12 @@ class ServerConfig:
     # chain delegating from the anchor to this key so clients still verify.
     # None = sign with the anchor identity (no rotation).
     signing_identity_path: Optional[str] = None
+    # Optional path to this producer's rotation bundle (chain + revocations,
+    # rns_icn.rotation). When set, the origin publishes it as self-verifying
+    # Data at ``/<producer>/_rotation`` so peers can fetch the producer's
+    # authorized signing keys (and revocations) over the mesh. None = don't
+    # publish a bundle.
+    rotation_chain_path: Optional[str] = None
     announce_interval: float = 30.0
     reannounce_on_link: bool = True
     cs_max_entries: int = 10000
@@ -196,6 +202,10 @@ def _dict_to_server_config(data: Dict[str, Any], base_path: str) -> ServerConfig
     if signing_identity_path:
         signing_identity_path = str((base_dir / signing_identity_path).expanduser())
 
+    rotation_chain_path = data.get("rotation_chain_path")
+    if rotation_chain_path:
+        rotation_chain_path = str((base_dir / rotation_chain_path).expanduser())
+
     return ServerConfig(
         identity_path=identity_path,
         app_name=data.get("app_name", "icn"),
@@ -204,6 +214,7 @@ def _dict_to_server_config(data: Dict[str, Any], base_path: str) -> ServerConfig
         mesh_interfaces=data.get("mesh_interfaces", ["UTN Oregon"]),
         role=role,
         signing_identity_path=signing_identity_path,
+        rotation_chain_path=rotation_chain_path,
         announce_interval=data.get("announce_interval", 30.0),
         reannounce_on_link=data.get("reannounce_on_link", True),
         cs_max_entries=data.get("cs_max_entries", 10000),

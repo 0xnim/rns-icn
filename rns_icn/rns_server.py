@@ -196,6 +196,13 @@ class ICNServer(BaseICNServer):
         )
         self.destination.set_link_established_callback(self._on_incoming_link)
 
+        # Publish our rotation bundle (if configured) so peers can fetch our
+        # authorized signing keys + revocations over the mesh.
+        try:
+            self.publish_rotation_bundle()
+        except Exception as e:
+            RNS.log(f"ICN: Failed to publish rotation bundle: {e}", RNS.LOG_ERROR)
+
         # Start link pool (handles outbound links)
         await self._link_pool.start()
 
@@ -434,6 +441,28 @@ class ICNServer(BaseICNServer):
         data.with_sequence(manifest.sequence)
         self.forwarder.cs.insert(data.name, data)
         RNS.log(f"ICN: Published manifest with {len(entries)} entries")
+
+    def publish_rotation_bundle(self) -> None:
+        """Publish this producer's rotation bundle for mesh distribution.
+
+        Loads the configured bundle (chain + revocations), checks it anchors to
+        our own namespace, and stores it as self-verifying Data at
+        ``/<producer>/_rotation`` so peers can fetch our authorized signing keys
+        over the mesh. No-op when ``rotation_chain_path`` is unset.
+        """
+        from . import rotation
+        if not self.config.rotation_chain_path:
+            return
+        bundle = rotation.load_rotation_bundle(self.config.rotation_chain_path)
+        # Fail loudly if the operator points us at someone else's chain.
+        bundle.verify(self.rns_addr)
+        name = rotation.rotation_name(self.rns_addr)
+        data = Data.new(name=name, content=bundle.to_bytes())
+        self.forwarder.cs.insert(name, data)
+        RNS.log(
+            f"ICN: Published rotation bundle ({len(bundle.certs)} certs, "
+            f"{len(bundle.revocations)} revocations)"
+        )
 
     @property
     def hexhash(self) -> str:
