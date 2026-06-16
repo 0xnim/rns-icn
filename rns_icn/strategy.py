@@ -80,6 +80,17 @@ class BestRoute(Strategy):
                 return face_id
         return None
 
+    def usable_faces(self, fib_faces: list[tuple[FaceId, int]]) -> list[FaceId]:
+        """Cost-ordered next-hops not currently in backoff.
+
+        ``fib_faces`` arrives cost-sorted from the FIB. The Forwarder forwards
+        to the first and, on timeout, falls through to the next — primary/backup
+        failover across content-equivalent peers (a decision RNS can't make: it
+        re-paths to a fixed destination, while these are distinct producers/caches
+        that each satisfy the name). Backed-off faces are skipped entirely.
+        """
+        return [fid for fid, _ in fib_faces if not self._is_in_backoff(fid)]
+
     def _within_swr_window(self, data: Data) -> bool:
         period = data.metadata.freshness_period
         if period is None or self._swr <= 0:

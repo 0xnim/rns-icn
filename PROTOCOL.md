@@ -551,13 +551,16 @@ On receiving an Interest on `in_face`, a forwarder:
 2. **CS lookup** — exact match, or longest-prefix match when `can_be_prefix`.
 3. **PIT lookup** — find a pending entry for the same name.
 4. **FIB lookup** — next-hop face(s) for the name's longest matching prefix.
+   A prefix MAY have multiple faces, each with a cost; the FIB returns them
+   ordered by ascending cost.
 5. **Strategy decision** over (CS hit, PIT hit, FIB faces), yielding one of:
    * **serve from cache** — return the cached Data;
    * **serve stale, revalidate** — return the stale cached Data now and fire a
      single background refresh ([§13](#13-cache-coherency));
    * **suppress / aggregate** — an equivalent Interest is already pending; attach
      to it and wait, rather than forwarding a duplicate;
-   * **forward** — forward to a next-hop face;
+   * **forward** — forward to a next-hop face, with failover to backups
+     ([§12.5](#125-multi-path-and-route-lifecycle));
    * **drop**.
 
 `must_be_fresh` Interests **MUST NOT** be satisfied by a stale CS entry.
@@ -595,6 +598,33 @@ A forwarder does **not** verify producer signatures (that is the consumer's
 responsibility) and **MUST NOT** re-sign relayed Data — it relays the producer's
 signature untouched. An origin signs only Data whose producer address equals its
 own.
+
+### 12.5 Multi-path and route lifecycle
+
+A FIB prefix MAY resolve to several next-hop faces — distinct
+content-equivalent peers (a producer, or a cache holding the same
+self-certifying name). This is an ICN-layer choice the transport cannot make:
+RNS re-paths to a *fixed destination* underneath each face, whereas these faces
+are *different sources* for the name.
+
+* **Primary/backup failover.** The strategy yields the cost-ordered faces not
+  currently in backoff. The forwarder forwards to the first; if no Data arrives
+  within the Interest lifetime it falls through to the next, and so on. The
+  **hop limit is decremented once** for the whole decision — trying a backup is
+  the same logical hop, not an extra one. A face that times out SHOULD be
+  recorded as a failure so subsequent Interests deprioritise it (backoff).
+  Parallel/ECMP forwarding is **not** specified.
+* **Withdrawal.** When a face's underlying link closes, the forwarder withdraws
+  that face from every FIB prefix (removing prefixes left with no faces). A
+  dead next-hop therefore stops black-holing Interests: they fall through to a
+  backup face or cleanly reach **no route** instead of timing out. Over the RNS
+  binding this rides the Link's keepalive-driven close — no separate liveness
+  protocol is defined.
+* **Re-install.** Routes are reinstated when reachability returns. Over RNS a
+  forwarder MAY treat a peer's announce, received while no link to it is held,
+  as the signal to re-establish the link and reinstall its route; route install
+  is idempotent. Cost MAY be derived from the transport hop count so failover
+  order tracks mesh distance.
 
 ---
 

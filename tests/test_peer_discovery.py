@@ -268,8 +268,12 @@ class TestPeerDiscoveryManager:
         assert results[0][0] == "11" * 16
         assert results[0][1].hash == "11" * 16
 
-    def test_callback_not_fired_on_re_announce(self, manager):
-        """Callbacks fire only for new peers, not re-announces."""
+    def test_callback_not_fired_on_re_announce_while_connected(self, manager):
+        """Re-announces from a *linked* peer stay quiet (no reconnect churn).
+
+        While disconnected, a re-announce is the reconnect signal and does fire
+        (see test_dynamic_fib); once a face is associated we go silent.
+        """
         count = 0
 
         def cb(peer_hash, info):
@@ -279,10 +283,11 @@ class TestPeerDiscoveryManager:
         manager.add_callback(cb)
         dest_hash = b"\x22" * 16
 
-        manager._on_announce(dest_hash, MagicMock(), b"icn")
-        manager._on_announce(dest_hash, MagicMock(), b"icn-again")
+        manager._on_announce(dest_hash, MagicMock(), b"icn")  # new peer → fires
+        manager.update_peer_face("22" * 16, 7)                # now linked
+        manager._on_announce(dest_hash, MagicMock(), b"icn-again")  # quiet
 
-        assert count == 1  # only first announce fired callback
+        assert count == 1  # only the initial discovery fired
 
     def test_remove_callback(self, manager):
         """Removed callbacks no longer fire."""

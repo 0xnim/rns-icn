@@ -193,6 +193,16 @@ class PeerDiscoveryManager:
         if info is not None:
             info.face_id = face_id
 
+    def clear_face(self, face_id: FaceId) -> None:
+        """Detach a face from its peer (e.g. on link teardown).
+
+        The peer entry is kept so a later re-announce can trigger reconnect;
+        only the live face association is cleared.
+        """
+        for info in self._peers.values():
+            if info.face_id == face_id:
+                info.face_id = None
+
     def peer_hash_for_face(self, face_id: FaceId) -> str | None:
         """Resolve a face ID back to the peer's hex hash.
 
@@ -231,6 +241,16 @@ class PeerDiscoveryManager:
                 "PeerDiscovery: re-announced %s (age=%.0fs)",
                 hex_hash[:16], existing.age_seconds,
             )
+            # A re-announce from a peer we are *not* currently linked to is the
+            # reconnect signal: fire callbacks so the owner can re-establish the
+            # link and re-install its FIB route (dynamic FIB re-install). When a
+            # link is live (face_id set) we stay quiet to avoid churn.
+            if existing.face_id is None:
+                for cb in self._callbacks:
+                    try:
+                        cb(hex_hash, existing)
+                    except Exception as e:
+                        logger.warning("PeerDiscovery: callback error: %s", e)
             return
 
         # New peer discovered
