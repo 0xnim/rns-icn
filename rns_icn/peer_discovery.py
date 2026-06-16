@@ -21,12 +21,15 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import TYPE_CHECKING, Callable, Optional
 
 import RNS
 
 from .face import FaceId
 from .packet import CapPeer
+
+if TYPE_CHECKING:
+    from .rns_server import ICNServer as RNSICNServer
 
 logger = logging.getLogger(__name__)
 
@@ -98,9 +101,9 @@ class PeerDiscoveryManager:
         pdm.stop()
     """
 
-    def __init__(self, server: "RNSICNServer" = None):  # noqa: F821
+    def __init__(self, server: Optional["RNSICNServer"] = None):
         self._server = server
-        self._handler_id = None
+        self._handler_id: Optional[_AnnounceHandler] = None
         self._peers: dict[str, PeerInfo] = {}
         self._callbacks: list[DiscoveryCallback] = []
         self._app_name: str = ""

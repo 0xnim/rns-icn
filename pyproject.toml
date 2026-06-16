@@ -49,6 +49,7 @@ ignore = ["E501", "E741"]
 python_version = "3.10"
 # RNS and other deps ship without type stubs; don't fail on missing imports.
 ignore_missing_imports = true
-# The tree isn't fully annotated yet — mypy runs informationally in CI.
+# The tree is type-clean and mypy is enforced in CI, but it isn't fully
+# annotated yet — keep these relaxed until function bodies are all typed.
 warn_unused_ignores = false
 warn_return_any = false

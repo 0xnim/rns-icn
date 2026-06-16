@@ -19,11 +19,15 @@ Flow:
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from .face import FaceId
 from .name import Name
 from .packet import Data, PropPeer
+
+if TYPE_CHECKING:
+    from .manifest import Manifest
+    from .server import ICNServer
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +51,7 @@ class PropagationManager:
     which triggers a push of existing content.
     """
 
-    def __init__(self, server: "ICNServer" = None):  # noqa: F821
+    def __init__(self, server: Optional["ICNServer"] = None):
         self._server = server
         # peer_face -> peer's RNS address (16 bytes)
         self._peers: dict[FaceId, bytes] = {}
@@ -114,7 +118,7 @@ class PropagationManager:
 
     # ── Manifest fetching ──
 
-    async def fetch_peer_manifest(self, face_id: FaceId) -> Optional["Manifest"]:  # noqa: F821
+    async def fetch_peer_manifest(self, face_id: FaceId) -> Optional["Manifest"]:
         """Fetch and parse a peer's content manifest.
 
         First checks the local ContentStore (manifest may be cached from
@@ -150,7 +154,7 @@ class PropagationManager:
         except Exception:
             return None
 
-    async def fetch_downstream_manifests(self) -> dict[bytes, "Manifest"]:  # noqa: F821
+    async def fetch_downstream_manifests(self) -> dict[bytes, "Manifest"]:
         """Fetch manifests from all downstream peers.
 
         First checks the local ContentStore (manifest may have been cached
@@ -264,6 +268,8 @@ class PropagationManager:
 
     async def _manifest_fetch(self, face_id: FaceId, manifest_name: Name) -> Optional[Data]:
         """Express an Interest for the peer's manifest and wait for Data."""
+        if self._server is None:
+            return None
         from .packet import Interest
         interest = Interest(
             name=manifest_name,
@@ -282,6 +288,8 @@ class PropagationManager:
         it in handle_subscribe, which both registers the subscription and
         pushes existing content if start_from_now is False.
         """
+        if self._server is None:
+            return
         from .packet import APSubscribe
         sub = APSubscribe(name=stream_name, start_from_now=start_from_now)
         face = self._server._faces.get(face_id)
@@ -290,7 +298,7 @@ class PropagationManager:
 
     # ── Content propagation ──
 
-    async def propagate(self, data: Data, exclude_face: FaceId = None) -> int:
+    async def propagate(self, data: Data, exclude_face: Optional[FaceId] = None) -> int:
         """Forward a Data packet to all peered servers.
 
         Called after publish_pushed() to replicate content across
@@ -373,6 +381,8 @@ class PropagationManager:
         Registers the sending server as a peer and triggers bidirectional
         content sync.
         """
+        if self._server is None:
+            return
         addr = peer.rns_addr
         self.add_peer(face_id, addr)
 

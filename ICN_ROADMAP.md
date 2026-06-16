@@ -68,7 +68,7 @@ Phases 1 and 2 are complete; parts of Phase 4 (capability negotiation, pub/sub, 
 - [x] PIT aggregation (multiple Interests → single upstream)
 - [x] Data return path via PIT (reverse path forwarding)
 - [x] Loop detection (nonce-based; `Pit.check_loop`)
-- [ ] Hop-count limit on Interests (defence-in-depth beyond nonce)
+- [x] Hop-count limit on Interests (defence-in-depth beyond nonce; `Interest.hop_limit`, decremented per hop in `Forwarder._forward`, default `DEFAULT_HOP_LIMIT=16`)
 
 ### 2.3 Router Mesh Formation
 - [x] Router discovery via RNS announces (`rns_icn/peer_discovery.py`)
@@ -81,7 +81,7 @@ Phases 1 and 2 are complete; parts of Phase 4 (capability negotiation, pub/sub, 
 - [ ] Stale-while-revalidate
 - [ ] Cache purge/invalidation protocol
 
-**Deliverable:** ✅ `icn-router` binary. Client ↔ Router ↔ Server works over real RNS and content caches at the hop — proven end-to-end by `tests/test_integration.py::TestRNSMultiHop` (three processes, three Reticulum instances over localhost TCP). **Residual for full Phase 2:** §2.4 cache coherency, plus dynamic FIB updates / multi-path (§2.3) and a hop-count limit (§2.2).
+**Deliverable:** ✅ `icn-router` binary. Client ↔ Router ↔ Server works over real RNS and content caches at the hop — proven end-to-end by `tests/test_integration.py::TestRNSMultiHop` (three processes, three Reticulum instances over localhost TCP). **Residual for full Phase 2:** §2.4 cache coherency, plus dynamic FIB updates / multi-path (§2.3).
 
 ---
 

@@ -13,9 +13,12 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import RNS
+
+if TYPE_CHECKING:
+    from aiohttp import web
 
 from .config import ServerConfig
 from .face import FaceId, LinkFace
@@ -98,6 +101,9 @@ class ICNServer(BaseICNServer):
         )
 
         self._loop: Optional[asyncio.AbstractEventLoop] = None
+
+        # HTTP health/metrics API runner (set when http_enabled)
+        self._http_runner: Optional[web.AppRunner] = None
 
         # Resource transport
         self._resource_listener: Optional[ResourceListener] = None

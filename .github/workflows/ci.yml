@@ -32,6 +32,5 @@ jobs:
       - name: Test (pytest)
         run: pytest -q
 
-      - name: Type check (mypy, informational)
+      - name: Type check (mypy)
         run: mypy rns_icn
-        continue-on-error: true

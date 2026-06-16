@@ -410,6 +410,49 @@ class TestForwarder:
         assert result2 is None  # Could be loop or no route
 
     @pytest.mark.asyncio
+    async def test_hop_limit_exhausted_not_forwarded(self):
+        """An Interest with hop_limit 0 is dropped, never sent to next hop."""
+        fw = Forwarder()
+        name = Name(rns_addr(0x01), [b"test"])
+        face = TestFace(1)
+        face.connect(TestFace(2))
+        fw.register_face(face)
+        fw.add_route(name, face.id(), 10)
+
+        result = await fw.express(Interest(name=name, hop_limit=0), 0)
+        assert result is None
+        assert face._outgoing.empty()  # nothing forwarded
+
+    @pytest.mark.asyncio
+    async def test_hop_limit_decremented_on_forward(self):
+        """Forwarding decrements hop_limit on the Interest sent downstream."""
+        from rns_icn.packet import parse_packet
+        fw = Forwarder()
+        name = Name(rns_addr(0x01), [b"test"])
+        face = TestFace(1)
+        face.connect(TestFace(2))
+        fw.register_face(face)
+        fw.add_route(name, face.id(), 10)
+
+        # No producer responds → express times out, but the Interest is
+        # forwarded first. lifetime kept short so the test doesn't hang.
+        await fw.express(Interest(name=name, hop_limit=5, lifetime_ms=100), 0)
+
+        forwarded = parse_packet(await face._outgoing.get())
+        assert forwarded.interest is not None
+        assert forwarded.interest.hop_limit == 4
+
+    @pytest.mark.asyncio
+    async def test_hop_limit_cache_hit_ignores_limit(self):
+        """A cached Interest is served even with hop_limit 0 (no forwarding needed)."""
+        fw = Forwarder()
+        name = Name(rns_addr(0x01), [b"test"])
+        fw.cs.insert(name, make_data(name))
+        result = await fw.express(Interest(name=name, hop_limit=0), 0)
+        assert result is not None
+        assert result.content == b"content"
+
+    @pytest.mark.asyncio
     async def test_stream_fetch_two_segments(self):
         """stream_fetch yields sequential segments from a producer."""
         fw = Forwarder()

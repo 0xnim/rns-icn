@@ -57,6 +57,7 @@ from .manifest import (
 from .name import MAX_COMPONENTS, Name, NameError
 from .offline_queue import OfflineQueue
 from .packet import (
+    DEFAULT_HOP_LIMIT,
     FEATURE_APS,
     FEATURE_CHUNKED,
     FEATURE_MANIFEST,
@@ -102,7 +103,7 @@ __all__ = [
     "PropPeer",
     "CapPeer",
     "FEATURE_APS", "FEATURE_PROPAGATION", "FEATURE_OFFLINE_QUEUE", "FEATURE_MANIFEST", "FEATURE_CHUNKED",
-    "PacketType", "Interest", "InterestError",
+    "PacketType", "Interest", "InterestError", "DEFAULT_HOP_LIMIT",
     "Data", "DataError", "DataMetadata", "Freshness",
     "Packet", "parse_packet",
     "Face", "FaceId", "FaceCapabilities", "TestFace", "LinkFace", "test_face_pair",

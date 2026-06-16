@@ -22,6 +22,11 @@ from .name import Name
 # RNS Identity.sign() produces a 64-byte Ed25519 signature.
 SIGNATURE_BYTES = 64
 
+# Default Interest hop limit. Each forwarding hop decrements it; an Interest
+# is dropped (not forwarded further) once it reaches 0. Defence-in-depth
+# against forwarding loops beyond the per-face nonce check.
+DEFAULT_HOP_LIMIT = 16
+
 # ── Varint (same encoding as rsticulum-icn for interop) ──
 
 
@@ -95,10 +100,15 @@ class Interest:
     """An Interest packet — 'I want this named data.'
 
     Wire: [type:1=0x01][name_len:varint][name...][nonce:8][lifetime_ms:4][flags:1]
-          [selector:8 if flags bit 2]
+          [selector:8 if flags bit 2][hop_limit:1 if flags bit 3]
       flags bit 0: can_be_prefix
       flags bit 1: must_be_fresh
-      flags bit 2: has_selector  → 8-byte min_sequence follows
+      flags bit 2: has_selector   → 8-byte min_sequence follows
+      flags bit 3: has_hop_limit  → 1-byte hop_limit follows
+
+    hop_limit: remaining forwarding hops. Decremented at each hop; the
+      Interest is dropped once it reaches 0 (it may still be satisfied
+      from a local cache). Absent on the wire (older peers) → DEFAULT_HOP_LIMIT.
     """
     name: Name
     nonce: bytes = field(default_factory=lambda: os.urandom(8))
@@ -106,10 +116,13 @@ class Interest:
     can_be_prefix: bool = False
     must_be_fresh: bool = False
     selector: Optional[InterestSelector] = None
+    hop_limit: int = DEFAULT_HOP_LIMIT
 
     def __post_init__(self):
         if len(self.nonce) != 8:
             raise InterestError("nonce must be 8 bytes")
+        if not 0 <= self.hop_limit <= 0xFF:
+            raise InterestError("hop_limit must be in 0..255")
 
     def with_lifetime(self, ms: int) -> Interest:
         self.lifetime_ms = ms
@@ -127,6 +140,10 @@ class Interest:
         self.selector = selector
         return self
 
+    def with_hop_limit(self, hops: int) -> Interest:
+        self.hop_limit = hops
+        return self
+
     def clone(self) -> Interest:
         return Interest(
             name=self.name,
@@ -135,6 +152,7 @@ class Interest:
             can_be_prefix=self.can_be_prefix,
             must_be_fresh=self.must_be_fresh,
             selector=InterestSelector(min_sequence=self.selector.min_sequence) if self.selector else None,
+            hop_limit=self.hop_limit,
         )
 
     def to_bytes(self) -> bytes:
@@ -152,9 +170,11 @@ class Interest:
             flags |= 0x02
         if self.selector is not None:
             flags |= 0x04
+        flags |= 0x08  # always carry hop_limit
         buf.append(flags)
         if self.selector is not None:
             buf.extend(self.selector.to_bytes())
+        buf.append(self.hop_limit & 0xFF)
         return bytes(buf)
 
     @classmethod
@@ -186,6 +206,13 @@ class Interest:
             if pos + 8 > len(data):
                 raise InterestError("buffer too short for selector")
             selector = InterestSelector.from_bytes(data[pos:pos + 8])
+            pos += 8
+        hop_limit = DEFAULT_HOP_LIMIT
+        if flags & 0x08:
+            if pos + 1 > len(data):
+                raise InterestError("buffer too short for hop_limit")
+            hop_limit = data[pos]
+            pos += 1
         return cls(
             name=name,
             nonce=nonce,
@@ -193,6 +220,7 @@ class Interest:
             can_be_prefix=bool(flags & 0x01),
             must_be_fresh=bool(flags & 0x02),
             selector=selector,
+            hop_limit=hop_limit,
         )
 
 
@@ -367,7 +395,7 @@ class Data:
         if has_meta:
             buf.extend(_write_varint(len(metadata_bytes)))
             buf.extend(metadata_bytes)
-        if has_sig:
+        if self.signature is not None:
             buf.extend(self.signature)
 
         return bytes(buf)
