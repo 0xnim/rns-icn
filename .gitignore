@@ -9,3 +9,7 @@ build/
 *.egg
 .DS_Store
 .worktrees/
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
