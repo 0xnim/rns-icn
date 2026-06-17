@@ -21,12 +21,18 @@ from .strategy import BestRoute, Strategy, StrategyDecision
 
 logger = logging.getLogger(__name__)
 
+# Sentinel resolved into a PIT notifier when an upstream NACKs an Interest, so a
+# waiting forward distinguishes "explicitly unsatisfiable" (fail over now) from
+# "Data arrived" and from "timed out".
+_NACK = object()
+
 
 class Forwarder:
-    def __init__(self, strategy: Strategy | None = None, cs_max: int = 1000):
+    def __init__(self, strategy: Strategy | None = None, cs_max: int = 1000,
+                 pit_max: int = 10000):
         self.cs = ContentStore(max_entries=cs_max)
         self.fib = Fib()
-        self.pit = Pit()
+        self.pit = Pit(max_entries=pit_max)
         self.strategy = strategy or BestRoute()
         self._faces: dict[FaceId, Face] = {}
         self._pit_notifiers: dict[Name, list[asyncio.Future]] = {}
@@ -113,9 +119,11 @@ class Forwarder:
             fut = asyncio.get_event_loop().create_future()
             self._pit_notifiers.setdefault(interest.name, []).append(fut)
             try:
-                return await asyncio.wait_for(fut, timeout=interest.lifetime_ms / 1000.0)
+                result = await asyncio.wait_for(fut, timeout=interest.lifetime_ms / 1000.0)
             except asyncio.TimeoutError:
                 return None
+            # An aggregated waiter whose upstream NACKed gets nothing.
+            return None if result is _NACK else result
 
         if decision == StrategyDecision.FORWARD_TO:
             out_faces = self._failover_candidates(fib_faces, target_face)
@@ -195,6 +203,15 @@ class Forwarder:
                 self.strategy.record_failure(out_face_id)
             return None
 
+        if result is _NACK:
+            # Upstream explicitly cannot satisfy this Interest — fail over to the
+            # next backup face *now* instead of waiting out the lifetime.
+            self.pit.satisfy(name)
+            self.pit.purge_expired()
+            if isinstance(self.strategy, BestRoute):
+                self.strategy.record_failure(out_face_id)
+            return None
+
         if result is not None:
             if isinstance(self.strategy, BestRoute):
                 self.strategy.record_success(out_face_id)
@@ -246,6 +263,19 @@ class Forwarder:
                     fut.set_result(data)
                 else:
                     fut.cancel()
+
+    def receive_nack(self, name: Name, in_face: FaceId) -> None:
+        """Handle a NACK from an upstream face: unblock the waiting forward.
+
+        Resolves any pending notifier for ``name`` with the ``_NACK`` sentinel so
+        a forward in flight stops waiting and the strategy falls over to the next
+        backup face immediately, rather than waiting out the Interest lifetime.
+        Carries no content, so it can never poison the cache.
+        """
+        notifiers = self._pit_notifiers.pop(name, [])
+        for fut in notifiers:
+            if not fut.done():
+                fut.set_result(_NACK)
 
     async def receive_data(
         self, data: Data, in_face: FaceId, cache_unsolicited: bool = False

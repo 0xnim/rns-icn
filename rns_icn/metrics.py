@@ -27,6 +27,11 @@ class MetricsCollector:
     # unknown type). A nonzero value means a peer is sending garbage or a
     # parser bug exists — surfaced rather than silently swallowed.
     malformed_packets: int = 0
+    # PIT state (sampled by the forwarder's aging loop): current entry count
+    # (gauge) and cumulative entries dropped under capacity pressure (counter).
+    # A climbing pit_evictions means the PIT is undersized for the load.
+    pit_size: int = 0
+    pit_evictions: int = 0
     _counter_lock: Lock = field(default_factory=Lock)
 
     def record_fetch(self, latency: float, success: bool = True) -> None:
@@ -44,6 +49,12 @@ class MetricsCollector:
         """Record a packet that could not be parsed (dropped)."""
         with self._counter_lock:
             self.malformed_packets += 1
+
+    def record_pit(self, size: int, evictions: int) -> None:
+        """Sample PIT state — current size (gauge) and cumulative evictions."""
+        with self._counter_lock:
+            self.pit_size = size
+            self.pit_evictions = evictions
 
     def record_link_up(self, peer_hash: str) -> None:
         """Record link establishment."""
@@ -112,6 +123,8 @@ class MetricsCollector:
                 "fetch_total": self.fetch_total,
                 "fetch_errors": self.fetch_errors,
                 "malformed_packets": self.malformed_packets,
+                "pit_size": self.pit_size,
+                "pit_evictions": self.pit_evictions,
             }
 
     def reset(self) -> None:
@@ -125,6 +138,8 @@ class MetricsCollector:
             self.fetch_total = 0
             self.fetch_errors = 0
             self.malformed_packets = 0
+            self.pit_size = 0
+            self.pit_evictions = 0
 
 
 # Global metrics instance

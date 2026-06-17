@@ -107,6 +107,7 @@ class PacketType(IntEnum):
     PROP_PEER = 0x04
     CAP_PEER = 0x05  # Peer capability exchange on link
     INVALIDATE = 0x06  # Producer-signed cache purge for a name/prefix
+    NACK = 0x07  # Negative ack: upstream cannot satisfy an Interest (fast failover)
 
 
 # ── InterestSelector ──
@@ -815,6 +816,7 @@ FEATURE_PROPAGATION = 0x00000002
 FEATURE_OFFLINE_QUEUE = 0x00000004
 FEATURE_MANIFEST = 0x00000008
 FEATURE_CHUNKED = 0x00000010
+FEATURE_NACK = 0x00000020
 
 
 # ── Invalidate ──
@@ -917,6 +919,74 @@ class Invalidate:
                    is_prefix=bool(flags & 0x01), signature=signature)
 
 
+# ── Nack ──
+
+
+class NackError(Exception):
+    ...
+
+
+class NackReason(IntEnum):
+    """Why an upstream could not satisfy an Interest.
+
+    NO_ROUTE   — no FIB route toward the name, or all next-hops exhausted.
+    CONGESTION — the forwarder is shedding load (e.g. PIT at capacity).
+    NO_DATA    — a route exists but the content is unavailable.
+    """
+    NO_ROUTE = 0x01
+    CONGESTION = 0x02
+    NO_DATA = 0x03
+
+
+@dataclass
+class Nack:
+    """A negative acknowledgement for an Interest.
+
+    Wire: [type:1=0x07][version:1][name_len:varint][name...][reason:1]
+
+    Unsigned: a NACK only lets a downstream stop waiting and fail over to a
+    backup face sooner than the Interest lifetime — it can never inject content
+    (cache poisoning is unaffected), so it needs no producer signature. It is
+    matched to a pending Interest purely by ``name`` (the same key the PIT uses).
+    Emitted only to peers that advertised ``FEATURE_NACK``; a peer that doesn't
+    understand it drops it as an unknown type and falls back to timeout.
+    """
+    name: Name
+    reason: NackReason = NackReason.NO_ROUTE
+
+    def to_bytes(self) -> bytes:
+        name_bytes = self.name.to_bytes()
+        buf = bytearray()
+        buf.append(PacketType.NACK)
+        buf.append(PROTOCOL_VERSION)
+        buf.extend(_write_varint(len(name_bytes)))
+        buf.extend(name_bytes)
+        buf.append(int(self.reason))
+        return bytes(buf)
+
+    @classmethod
+    def from_bytes(cls, data: bytes) -> Nack:
+        pos = 0
+        if data[pos] != PacketType.NACK:
+            raise NackError(f"expected NACK type byte, got {data[pos]:#x}")
+        pos += 1
+        _parse_version(data, pos, NackError)
+        pos += 1
+        name_len, consumed = _read_varint(data, pos)
+        pos += consumed
+        if pos + name_len > len(data):
+            raise NackError("buffer too short for name")
+        name = Name.from_bytes(data[pos:pos + name_len])
+        pos += name_len
+        if pos >= len(data):
+            raise NackError("buffer too short for reason")
+        try:
+            reason = NackReason(data[pos])
+        except ValueError as e:
+            raise NackError(f"unknown nack reason: {data[pos]:#x}") from e
+        return cls(name=name, reason=reason)
+
+
 @dataclass
 class Packet:
     """A parsed ICN packet with known type."""
@@ -927,6 +997,7 @@ class Packet:
     peer: PropPeer | None = None
     cap_peer: CapPeer | None = None
     invalidate: Invalidate | None = None
+    nack: Nack | None = None
 
 
 def parse_packet(data: bytes) -> Packet:
@@ -952,5 +1023,8 @@ def parse_packet(data: bytes) -> Packet:
     elif ptype == PacketType.INVALIDATE:
         inv = Invalidate.from_bytes(data)
         return Packet(type=PacketType.INVALIDATE, invalidate=inv)
+    elif ptype == PacketType.NACK:
+        nack = Nack.from_bytes(data)
+        return Packet(type=PacketType.NACK, nack=nack)
     else:
         raise ValueError(f"unknown packet type: {ptype:#x}")

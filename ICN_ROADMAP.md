@@ -15,7 +15,7 @@ Phases 1 and 2 are complete; Phase 4.1 (protocol versioning) is done and other p
 | Client fetch | `ICNClient` with retry + timeout config | — |
 | Link establishment | `LinkPool` w/ reuse, health, announce injection; routes re-installed on peer re-announce after a drop | — |
 | Content store | SQLite + TTL + LRU + crash recovery | — |
-| Forwarding | Multi-hop (FIB/PIT/CS); `icn-router` binary; **cache coherency** (freshness period, stale-while-revalidate, signed invalidation); **multi-path primary/backup failover**; **dynamic FIB** (withdrawal on link close, re-install on re-announce) | — |
+| Forwarding | Multi-hop (FIB/PIT/CS); `icn-router` binary; **cache coherency** (freshness period, stale-while-revalidate, signed invalidation); **multi-path primary/backup failover** (+ **Interest NACK** for ~RTT failover); **dynamic FIB** (withdrawal on link close, re-install on re-announce); **bounded/aged PIT** | — |
 | Naming | /hash/label, content-hash verified, **Ed25519 producer signatures** (sequence + timestamp authenticated; client rollback protection); **per-prefix access control** (encrypted content + capability tokens) | petname/TOFU resolution and key rotation/revocation removed by design |
 | API | Per-packet wire version (`[type][version]`) + capability exchange; unknown generation rejected cleanly | — |
 | Operations | TOML config, JSON logs, health + metrics | — |
@@ -86,6 +86,18 @@ Phases 1 and 2 are complete; Phase 4.1 (protocol versioning) is done and other p
   through to the next usable face (`BestRoute.usable_faces`), hop-limit
   decremented once across the attempt. FIB cost MAY be derived from the RNS
   transport hop count. (ECMP/parallel left as a non-goal.)
+- [x] **Interest NACK for fast failover** (`PacketType.NACK`, `NackReason`): an
+  upstream that can't satisfy an Interest returns an unsigned, content-free NACK
+  matched by name, so the `Forwarder` fails over to the next backup face in ~one
+  RTT instead of waiting out the Interest lifetime (`Forwarder.receive_nack` +
+  the `_NACK` sentinel in `_forward_one`). Emitted on `NO_ROUTE`/exhaustion (and
+  `CONGESTION` on a full PIT), **capability-gated** on `FEATURE_NACK` so legacy
+  peers are unaffected — no protocol-version bump (`PROTOCOL.md` §9.5).
+- [x] **Bounded, aged PIT** (addresses the "PIT state explosion" risk): the PIT
+  caps in-flight entries with nearest-expiry eviction (`Pit.max_entries`), bounds
+  the loop-nonce set, and a background aging loop (`RNSICNServer._pit_age_loop`,
+  `pit_purge_interval`) reclaims expired PIT/nonce state during quiet periods.
+  `pit_size`/`pit_evictions` exposed via metrics.
 
 ### 2.4 Cache Coherency
 - [x] Cache validation: Data carries a `freshness_period` (`DataMetadata`); the
@@ -321,7 +333,7 @@ control: the boundary is encryption, not "don't serve it."
 | Risk | Likelihood | Impact | Mitigation |
 |------|------------|--------|------------|
 | RNS mesh instability | High | High | Test on multiple mesh networks; fallback paths |
-| PIT state explosion | Medium | High | PIT aging, max entries, priority eviction |
+| PIT state explosion | Medium | High | ✅ Mitigated: bounded PIT (`max_entries`, nearest-expiry eviction), bounded nonce set, periodic aging loop (§2.3) |
 | Cache poisoning | Medium | High | Signed data, content hash verification |
 | Protocol ossification | Low | High | Version negotiation, extensible TLV |
 | Adoption chicken/egg | High | Medium | HTTP gateway, SDKs, killer app (sync?) |

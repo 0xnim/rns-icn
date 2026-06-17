@@ -192,6 +192,7 @@ one-byte **protocol version**:
 | `0x04` | Propagation Peer | [§9.2](#92-propagation-peer-0x04) |
 | `0x05` | Capability Peer | [§9.3](#93-capability-peer-0x05) |
 | `0x06` | Invalidate | [§9.4](#94-invalidate-0x06) |
+| `0x07` | NACK | [§9.5](#95-nack-0x07) |
 
 The `version` byte is the **wire generation** and is the same for all packet
 types; the current value is `1`. A receiver **MUST** reject a packet whose
@@ -376,6 +377,7 @@ role and supported features.
 | `0x00000004` | Offline queue |
 | `0x00000008` | Content manifest |
 | `0x00000010` | Chunked content |
+| `0x00000020` | Interest NACK ([§9.5](#95-nack-0x07)) |
 
 This is the protocol's capability-negotiation surface. The `version` byte here
 carries the same wire generation as every other packet ([§6](#6-packet-framing));
@@ -404,6 +406,34 @@ A producer-signed cache-purge for a name or prefix.
 * When `is_prefix` is set, every name under `name` is purged.
 
 Signature input is defined in [§10.3](#103-other-signed-objects).
+
+### 9.5 NACK (`0x07`)
+
+A negative acknowledgement: an upstream cannot satisfy a pending Interest, so a
+downstream can fail over to a backup face immediately instead of waiting out the
+Interest lifetime.
+
+```
+[0x07][version:u8]                          # §6
+[name_len:varint][name:name_len]
+[reason:u8]        # 0x01 NO_ROUTE, 0x02 CONGESTION, 0x03 NO_DATA
+```
+
+* **Unsigned.** A NACK can only make a waiter stop sooner; it can never inject
+  content, so it carries no signature and never affects the Content Store (cache
+  poisoning is unaffected). It is matched to a pending Interest purely by `name`
+  (the PIT key).
+* **Capability-gated.** A forwarder **MUST NOT** emit a NACK to a peer that did
+  not advertise the `0x00000020` feature bit ([§9.3](#93-capability-peer-0x05)).
+  A peer that receives one it doesn't understand drops it ([§6](#6-packet-framing))
+  and falls back to lifetime timeout — so NACK is an optional accelerator, never
+  required for correctness.
+* On receipt, a forwarder resolves the matching pending Interest as a fast
+  failure: it tries the next cost-ordered next-hop ([§12](#12-forwarding-semantics))
+  without waiting, and records the NACKing face as failed for backoff.
+* A forwarder **SHOULD** emit `NO_ROUTE` when it has no usable next-hop for a
+  name (or all have been exhausted), and `CONGESTION` when shedding load (e.g.
+  the PIT is at capacity).
 
 ---
 
@@ -609,7 +639,15 @@ Interest. Returning Data is matched to the PIT entry by name (the content-hash
 suffix is stripped for PIT matching), delivered to all aggregated downstream
 faces, inserted into the CS, and the PIT entry is satisfied. A PIT entry that is
 not satisfied within the Interest lifetime expires; the strategy MAY record the
-failure against the out-face for future route selection.
+failure against the out-face for future route selection. An upstream **NACK**
+([§9.5](#95-nack-0x07)) satisfies the wait early, letting the forwarder fail over
+to the next next-hop without waiting for the lifetime to elapse.
+
+The PIT is **bounded**: a forwarder caps the number of in-flight entries and, at
+capacity, evicts the nearest-to-expire entry to admit a new Interest (and MAY
+NACK `CONGESTION`). The loop-suppression `(in_face, nonce)` set is likewise
+bounded. A forwarder **SHOULD** age out expired PIT and nonce state periodically,
+not only opportunistically, so neither grows without bound during quiet periods.
 
 ### 12.4 Data processing
 
@@ -939,7 +977,7 @@ traffic-analysis resistance, or recovery from a lost or compromised producer key
 | Offline-queue TTL | 86 400 | Default queued-push lifetime (seconds) |
 
 **Packet types:** `0x01` Interest, `0x02` Data, `0x03` APS Subscribe,
-`0x04` Propagation Peer, `0x05` Capability Peer, `0x06` Invalidate.
+`0x04` Propagation Peer, `0x05` Capability Peer, `0x06` Invalidate, `0x07` NACK.
 
 **Domain tags:** `icn-data\x01`, `icn-invalidate\x01`, `icn-capability\x01`,
 `icn-content-key\x01`.

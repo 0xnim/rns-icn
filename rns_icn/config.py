@@ -109,6 +109,12 @@ class ServerConfig:
     # past a stale cache once this elapses; lower = snappier latest, more origin
     # traffic. Tune against mesh load.
     meta_freshness_period: int = 15
+    # Pending Interest Table sizing. pit_max_entries caps in-flight Interests
+    # (nearest-expiry eviction past the cap); pit_purge_interval is how often a
+    # background task ages out expired PIT/nonce state so it can't linger between
+    # traffic bursts.
+    pit_max_entries: int = 10000
+    pit_purge_interval: float = 5.0
     resource_threshold: int = 100_000
     known_peers: list[KnownPeer] = field(default_factory=list)
     log_level: str = "INFO"
@@ -234,6 +240,8 @@ def _dict_to_server_config(data: dict[str, Any], base_path: str) -> ServerConfig
         cs_prefix_ttls=data.get("cs_prefix_ttls", {}),
         cs_stale_while_revalidate=data.get("cs_stale_while_revalidate", 0),
         meta_freshness_period=data.get("meta_freshness_period", 15),
+        pit_max_entries=data.get("pit_max_entries", 10000),
+        pit_purge_interval=data.get("pit_purge_interval", 5.0),
         resource_threshold=data.get("resource_threshold", 100_000),
         known_peers=known_peers,
         log_level=data.get("log_level", "INFO"),

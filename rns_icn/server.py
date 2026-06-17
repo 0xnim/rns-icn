@@ -25,7 +25,16 @@ from .manifest import EntryKind, Manifest, ManifestEntry
 from .metrics import metrics
 from .name import Name
 from .offline_queue import OfflineQueue
-from .packet import APSubscribe, ChildSelector, Data, Interest, Invalidate, parse_packet
+from .packet import (
+    APSubscribe,
+    ChildSelector,
+    Data,
+    Interest,
+    Invalidate,
+    Nack,
+    NackReason,
+    parse_packet,
+)
 from .pit import Pit
 from .propagation import PropagationManager
 
@@ -85,7 +94,8 @@ class ICNServer:
     def __init__(self, rns_identity: bytes, cs_max: int = 10000,
                  role: ServerRole = ServerRole.ORIGIN,
                  signer: Callable[[bytes], bytes] | None = None,
-                 invalidation_verifier: Callable[[Invalidate], bool] | None = None):
+                 invalidation_verifier: Callable[[Invalidate], bool] | None = None,
+                 pit_max: int = 10000):
         """Args:
             rns_identity: 16-byte RNS address of this server
             role: ServerRole (ORIGIN, CACHE, or PROPAGATION)
@@ -101,7 +111,7 @@ class ICNServer:
         self.rns_addr = rns_identity
         self._signer = signer
         self._invalidation_verifier = invalidation_verifier
-        self.forwarder = Forwarder(cs_max=cs_max)
+        self.forwarder = Forwarder(cs_max=cs_max, pit_max=pit_max)
         self.offline_queue = OfflineQueue(self, max_age_seconds=86400)
         self.aps = APSManager(self)
         self.propagation = PropagationManager(self)
@@ -285,10 +295,41 @@ class ICNServer:
             face = self._faces.get(face_id)
             if face:
                 await face.send_data(result)
+            return
+
+        # Unsatisfiable: tell a NACK-capable downstream so it can fail over to a
+        # backup face now instead of waiting out the Interest lifetime.
+        await self._maybe_send_nack(interest, face_id)
+
+    def _peer_supports_nack(self, face_id: FaceId) -> bool:
+        """Whether the peer on this face advertised FEATURE_NACK.
+
+        The base server has no capability exchange, so it never emits NACKs;
+        RNSICNServer overrides this from the per-face capability handshake.
+        """
+        return False
+
+    async def _maybe_send_nack(self, interest: Interest, face_id: FaceId) -> None:
+        """Send a NACK for an unsatisfied Interest to a NACK-capable peer."""
+        if not self._peer_supports_nack(face_id):
+            return
+        face = self._faces.get(face_id)
+        if face is None:
+            return
+        reason = (
+            NackReason.CONGESTION
+            if self.forwarder.pit.is_full()
+            else NackReason.NO_ROUTE
+        )
+        await face.send_raw(Nack(name=interest.name, reason=reason).to_bytes())
 
     async def handle_data(self, data: Data, face_id: FaceId) -> None:
         """Process an incoming Data packet."""
         await self.forwarder.receive_data(data, face_id)
+
+    async def handle_nack(self, nack: Nack, face_id: FaceId) -> None:
+        """Process an incoming NACK — unblock a waiting forward for fast failover."""
+        self.forwarder.receive_nack(nack.name, face_id)
 
     def _invalidation_is_fresh(self, inv: Invalidate) -> bool:
         """Replay/loop guard: True only for a not-yet-seen, newer epoch."""
@@ -399,6 +440,8 @@ class ICNServer:
             await self.handle_subscribe(pkt.subscribe, face_id)
         elif pkt.invalidate is not None:
             await self.handle_invalidate(pkt.invalidate, face_id)
+        elif pkt.nack is not None:
+            await self.handle_nack(pkt.nack, face_id)
         elif pkt.peer is not None:
             await self.propagation.handle_peer_handshake(pkt.peer, face_id)
 

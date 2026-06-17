@@ -36,6 +36,7 @@ from .packet import (
     FEATURE_APS,
     FEATURE_CHUNKED,
     FEATURE_MANIFEST,
+    FEATURE_NACK,
     FEATURE_OFFLINE_QUEUE,
     FEATURE_PROPAGATION,
     CapPeer,
@@ -104,7 +105,12 @@ class ICNServer(BaseICNServer):
             role=config.role,
             signer=self.signing_identity.sign,
             invalidation_verifier=_verify_invalidation,
+            pit_max=config.pit_max_entries,
         )
+
+        # Per-face features advertised by each peer's CapPeer handshake, used to
+        # gate optional behaviour (e.g. only NACK peers that support it).
+        self._peer_features: dict[FaceId, int] = {}
 
         # Replace in-memory ContentStore with SQLite-backed persistent store
         from .content_store import ContentStore as SQLiteContentStore
@@ -161,6 +167,7 @@ class ICNServer(BaseICNServer):
         # Announce management
         self._announce_task: asyncio.Task | None = None
         self._announce_interval: float = config.announce_interval
+        self._pit_age_task: asyncio.Task | None = None
 
         # Peer discovery
         self.discovery: PeerDiscoveryManager = PeerDiscoveryManager(self)
@@ -229,6 +236,10 @@ class ICNServer(BaseICNServer):
         # Start periodic re-announce loop to keep transport table fresh
         self._announce_task = asyncio.ensure_future(self._announce_loop())
 
+        # Start periodic PIT aging so expired in-flight Interests and loop-nonce
+        # state are reclaimed even during quiet periods between traffic.
+        self._pit_age_task = asyncio.ensure_future(self._pit_age_loop())
+
         # Start peer discovery
         RNS.log("ICN: Starting peer discovery...")
         self.discovery.start(app_name=self.app_name, aspect=self.aspect)
@@ -274,6 +285,13 @@ class ICNServer(BaseICNServer):
                 await self._announce_task
             self._announce_task = None
 
+        # Cancel periodic PIT aging
+        if self._pit_age_task is not None:
+            self._pit_age_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._pit_age_task
+            self._pit_age_task = None
+
         # Stop link pool (tears down all links)
         await self._link_pool.stop()
 
@@ -299,6 +317,17 @@ class ICNServer(BaseICNServer):
                     self.destination.announce(app_data=self._icn_app_data())
                     log_hexhash = self.destination.hexhash
                     RNS.log(f"ICN: Re-announced destination {log_hexhash}")
+        except asyncio.CancelledError:
+            pass
+
+    async def _pit_age_loop(self) -> None:
+        """Periodically purge expired PIT/nonce state and sample PIT metrics."""
+        try:
+            while True:
+                await asyncio.sleep(self.config.pit_purge_interval)
+                pit = self.forwarder.pit
+                pit.purge_expired()
+                metrics.record_pit(len(pit), pit.evictions)
         except asyncio.CancelledError:
             pass
 
@@ -400,6 +429,7 @@ class ICNServer(BaseICNServer):
         """Withdraw a closed face's routes and drop it (event-loop side)."""
         self.forwarder.withdraw_face(face_id)
         self._faces.pop(face_id, None)
+        self._peer_features.pop(face_id, None)
         self.discovery.clear_face(face_id)
         RNS.log(f"ICN: face #{face_id} closed — FIB routes withdrawn")
         if self.on_face_closed is not None:
@@ -574,6 +604,8 @@ class ICNServer(BaseICNServer):
             features |= FEATURE_PROPAGATION
         except ImportError:
             pass
+        # Interest NACK for fast multi-path failover
+        features |= FEATURE_NACK
         return features
 
     async def _send_capabilities(self, face_id: FaceId, peer_hash: str) -> None:
@@ -594,9 +626,14 @@ class ICNServer(BaseICNServer):
     def _on_cap_peer(self, cap: CapPeer, face_id: FaceId, peer_hash: str) -> None:
         """Handle incoming capabilities from a peer."""
         self.discovery.update_peer_capabilities(peer_hash, cap)
+        self._peer_features[face_id] = cap.features
         role_names = ["ORIGIN", "CACHE", "PROPAGATION"]
         role_name = role_names[cap.role] if 0 <= cap.role < len(role_names) else f"UNKNOWN({cap.role})"
         RNS.log(f"ICN: Received capabilities from peer {peer_hash[:16]} (role={role_name}, features={cap.features:#010x}, version={cap.version})")
+
+    def _peer_supports_nack(self, face_id: FaceId) -> bool:
+        """True if the peer on this face advertised FEATURE_NACK in its handshake."""
+        return bool(self._peer_features.get(face_id, 0) & FEATURE_NACK)
 
     # ── Packet handling override ──
 
