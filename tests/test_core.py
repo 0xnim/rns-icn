@@ -662,6 +662,37 @@ class TestForwarder:
         feed = Name(rns_addr(0x01), [b"feed"])
         assert await fw.fetch_latest(feed, lifetime_ms=200) is None
 
+    @pytest.mark.asyncio
+    async def test_data_callback_fires_on_unsolicited_push(self):
+        """The data observer surfaces pushed Data with no matching PIT entry.
+
+        Leaf subscribers rely on this: pushed content is unsolicited (no PIT
+        match) so it is neither cached nor notified, but the callback still sees
+        it. The default (no callback) leaves the fetch path untouched.
+        """
+        fw = Forwarder()
+        seen: list[Data] = []
+        fw.set_data_callback(seen.append)
+
+        name = Name(rns_addr(0x01), [b"feed", b"v1"])
+        pushed = Data.new(name=name, content=b"hello").with_sequence(1)
+        await fw.receive_data(pushed, in_face=7)
+
+        assert [d.content for d in seen] == [b"hello"]
+        # Unsolicited Data is still not cached (no PIT match).
+        assert fw.cs.get(name) is None
+
+    @pytest.mark.asyncio
+    async def test_data_callback_cleared(self):
+        """Clearing the callback stops further observation."""
+        fw = Forwarder()
+        seen: list[Data] = []
+        fw.set_data_callback(seen.append)
+        fw.set_data_callback(None)
+        name = Name(rns_addr(0x01), [b"feed", b"v1"])
+        await fw.receive_data(Data.new(name=name, content=b"x"), in_face=1)
+        assert seen == []
+
 
 # ── Manifest ──
 

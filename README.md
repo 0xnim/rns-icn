@@ -54,7 +54,7 @@ pip install -e .            # add ".[dev]" for the test/lint toolchain
 ```
 
 This installs the CLI entry points: `icn-server`, `icn-router`, `icn-client`,
-`icn-publish`, `icn-fetch`.
+`icn-publish`, `icn-fetch`, `icn-subscribe`.
 
 ## Quickstart
 
@@ -80,6 +80,13 @@ Publish content to a peer's store:
 
 ```bash
 icn-publish <peer_hash> <name> [file|-]
+```
+
+Subscribe to a stream on a producer — upgrades the link to push mode and prints
+(or saves with `--out-dir`) each Data the producer pushes:
+
+```bash
+icn-subscribe <peer_hash> <name> [--from-now] [--count N] [--out-dir DIR]
 ```
 
 Run a caching router that forwards Interests to configured upstream peers and

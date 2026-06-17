@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 
 from .content_store import ContentStore
 from .face import Face, FaceId
@@ -36,6 +36,14 @@ class Forwarder:
         # Strong references to fire-and-forget background tasks so the event loop
         # does not garbage-collect them mid-flight (see _schedule_revalidation).
         self._bg_tasks: set[asyncio.Future] = set()
+        # Optional observer fired for every received Data. A leaf subscriber uses
+        # this to surface pushed (unsolicited) content, which has no PIT entry and
+        # is otherwise dropped here. Default None keeps the fetch path unchanged.
+        self._data_callback: Callable[[Data], None] | None = None
+
+    def set_data_callback(self, callback: Callable[[Data], None] | None) -> None:
+        """Register (or clear) an observer invoked for each Data in receive_data."""
+        self._data_callback = callback
 
     @property
     def faces(self) -> dict[FaceId, Face]:
@@ -265,6 +273,8 @@ class Forwarder:
         if matched is not None or cache_unsolicited:
             self.cs.insert(data.name, data)
         self.pit.purge_expired()
+        if self._data_callback is not None:
+            self._data_callback(data)
 
     async def fetch_latest(
         self,

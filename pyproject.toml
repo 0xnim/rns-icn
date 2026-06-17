@@ -32,6 +32,7 @@ icn-server = "rns_icn.cli:server_main_sync"
 icn-router = "rns_icn.cli:router_main_sync"
 icn-publish = "rns_icn.cli_publish:main"
 icn-fetch = "rns_icn.cli_fetch:main"
+icn-subscribe = "rns_icn.cli_subscribe:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -204,7 +204,10 @@ control: the boundary is encryption, not "don't serve it."
 
 ### 4.3 Developer Experience
 - [ ] SDKs: Python, Rust, Go, TypeScript (Python only)
-- [ ] CLI (partial): `icn-fetch`, `icn-publish` shipped; no `icn subscribe`
+- [x] CLI: `icn-fetch`, `icn-publish`, `icn-subscribe` shipped. `icn-subscribe`
+  upgrades the link to push mode via an APS Subscribe handshake and prints/saves
+  each pushed Data until interrupted or `--count` reached (`cli_subscribe.py`;
+  consumer-side push surfaced through `Forwarder.set_data_callback`)
 - [ ] HTTP gateway (optional): `GET /icn/<name>` (only health/metrics HTTP API exists)
 - [ ] Documentation: protocol spec, API ref, tutorials
 
