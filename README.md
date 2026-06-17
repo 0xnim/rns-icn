@@ -39,10 +39,22 @@ identity. The protocol engine is the classic NDN triad:
 | **Content Store** | SQLite-backed cache with TTL + LRU eviction + crash recovery |
 
 Transport is an RNS `Link` (AES-encrypted) per face, with a `LinkPool` for reuse
-and health monitoring. **[PROTOCOL.md](PROTOCOL.md) is the normative wire-format
-and security specification** — the authoritative reference for re-implementers.
-See [ICN_ON_RNS_MESH.md](ICN_ON_RNS_MESH.md) for the design narrative and
-[ICN_ROADMAP.md](ICN_ROADMAP.md) for the full status matrix.
+and health monitoring.
+
+## Documentation
+
+- **[docs/tutorials.md](docs/tutorials.md)** — runnable, task-oriented
+  walkthroughs (CLI fetch/publish, the Python API, routers, pub/sub, access
+  control). Start here to build something.
+- **[docs/api-reference.md](docs/api-reference.md)** — the public Python API:
+  `ICNClient`, `RNSICNServer`, configuration, the `Name`/`Interest`/`Data` types,
+  and the forwarding engine.
+- **[PROTOCOL.md](PROTOCOL.md)** — the normative wire-format and security
+  specification; the authoritative reference for re-implementers.
+- **[ICN_ON_RNS_MESH.md](ICN_ON_RNS_MESH.md)** — design narrative and mesh
+  deployment notes. **[ICN_ROADMAP.md](ICN_ROADMAP.md)** — full status matrix.
+
+See [docs/README.md](docs/README.md) for a map of the whole set.
 
 ## Install
 

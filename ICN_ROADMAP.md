@@ -242,7 +242,14 @@ control: the boundary is encryption, not "don't serve it."
   each pushed Data until interrupted or `--count` reached (`cli_subscribe.py`;
   consumer-side push surfaced through `Forwarder.set_data_callback`)
 - [ ] HTTP gateway (optional): `GET /icn/<name>` (only health/metrics HTTP API exists)
-- [ ] Documentation: protocol spec, API ref, tutorials
+- [x] **Documentation**: protocol spec, API ref, tutorials. The normative wire/
+  security spec is `PROTOCOL.md`; the Python API surface (`ICNClient`,
+  `RNSICNServer`, config, the `Name`/`Interest`/`Data` types, the forwarding
+  engine, large-content helpers) is `docs/api-reference.md`; and eight runnable
+  task walkthroughs (CLI fetch/publish, the Python API, manifests, caching
+  routers, pub/sub, access control, verifiable latest, and testing the forwarder
+  without a mesh) are `docs/tutorials.md`. `docs/README.md` maps the set and the
+  top-level `README.md` links it.
 
 ### 4.4 Testing & Compliance
 - [ ] Integration test suite (partial): real-RNS end-to-end tests (2-node + 3-node multi-hop over localhost TCP), not yet a multi-node testnet sim
