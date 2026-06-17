@@ -8,9 +8,10 @@ import json
 import sqlite3
 import time
 from pathlib import Path
+from typing import Any
 
 from .name import Name
-from .packet import Data, DataMetadata, Freshness
+from .packet import ChildSelector, Data, DataMetadata, Freshness
 
 
 class ContentStore:
@@ -269,26 +270,55 @@ class ContentStore:
         return Data(name=stored_name, content=content_bytes,
                     signature=signature, metadata=metadata)
 
-    def get_prefix(self, prefix: Name) -> Data | None:
-        """Longest prefix match: find stored name that has this prefix."""
+    def get_prefix(
+        self,
+        prefix: Name,
+        child: ChildSelector = ChildSelector.NONE,
+        min_sequence: int | None = None,
+    ) -> Data | None:
+        """Prefix match: find a stored name under this prefix.
+
+        With ``child`` NONE the newest-inserted match wins (legacy behaviour).
+        With LATEST/OLDEST the match is chosen by Data ``sequence`` — the
+        highest (latest) or lowest (oldest) sequenced entry under the prefix —
+        which is what answers a ``latest``/``oldest`` selector. Only sequenced
+        entries are candidates for child selection. ``min_sequence``, when set,
+        restricts candidates to ``sequence >= min_sequence``.
+        """
         self._purge_expired_internal()
 
         # Find all names that have this prefix
         prefix_hash = self._prefix_hash(prefix)
-        rows = self._conn.execute("""
+        params: list[Any] = [prefix_hash]
+        where = "WHERE np.prefix_hash = ?"
+        if child is not ChildSelector.NONE:
+            # Child selection ranks by sequence, so only sequenced entries qualify.
+            where += " AND c.sequence IS NOT NULL"
+            if min_sequence is not None:
+                where += " AND c.sequence >= ?"
+                params.append(min_sequence)
+            order = "c.sequence DESC" if child is ChildSelector.LATEST else "c.sequence ASC"
+            order += ", c.inserted_at DESC"
+        else:
+            order = "c.inserted_at DESC"
+
+        # `where`/`order` are built from constants and the enum, never user text;
+        # all value bindings go through `params`.
+        rows = self._conn.execute(f"""
             SELECT c.name_bytes, c.content_bytes, c.metadata_json,
                    c.inserted_at, c.freshness_period
             FROM content c
             JOIN name_prefixes np ON c.name_hash = np.name_hash
-            WHERE np.prefix_hash = ?
-            ORDER BY c.inserted_at DESC
-        """, (prefix_hash,)).fetchall()
+            {where}
+            ORDER BY {order}
+        """, params).fetchall()
 
         if not rows:
             self._misses += 1
             return None
 
-        # Return first valid match (newest first)
+        # Return first valid match in the chosen order (newest-inserted, or the
+        # sequence extreme when a child selector is set).
         for name_bytes, content_bytes, metadata_json, inserted_at, freshness_period in rows:
             if self._verify_content(content_bytes, metadata_json):
                 stored_name = Name.from_bytes(name_bytes)

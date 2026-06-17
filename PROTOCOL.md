@@ -211,7 +211,7 @@ the transport (`Channel`/`Resource`) delivers whole packets.
 [nonce:8]
 [lifetime_ms:u32]
 [flags:u8]
-( [min_sequence:u64] )?                    # iff flags bit 2
+( [selector] )?                            # iff flags bit 2 (see below)
 ( [hop_limit:u8] )?                        # iff flags bit 3
 ```
 
@@ -221,16 +221,41 @@ the transport (`Channel`/`Resource`) delivers whole packets.
 |-----|------|---------|
 | 0 | `0x01` | `can_be_prefix` — Data under the name (prefix match) may satisfy it |
 | 1 | `0x02` | `must_be_fresh` — a stale cached copy MUST NOT satisfy it |
-| 2 | `0x04` | `has_selector` — an 8-byte selector follows |
+| 2 | `0x04` | `has_selector` — a self-describing selector follows |
 | 3 | `0x08` | `has_hop_limit` — a 1-byte hop limit follows |
+
+**Selector** (when present) is self-describing:
+
+```
+[sel_flags:u8]
+( [min_sequence:u64] )?                    # iff sel_flags bit 0
+```
+
+| Bit | Mask | Meaning |
+|-----|------|---------|
+| 0 | `0x01` | `has_min_sequence` — an 8-byte `min_sequence` follows |
+| 1 | `0x02` | `child = LATEST` (rightmost child — highest `sequence`) |
+| 2 | `0x04` | `child = OLDEST` (leftmost child — lowest `sequence`) |
+
+Bits 1 and 2 are mutually exclusive; a selector that sets both **MUST** be
+rejected. A selector carrying no constraint (`sel_flags == 0` and no fields)
+**SHOULD NOT** be emitted — the sender omits `has_selector` instead.
 
 * `nonce` is 8 random bytes; it is the per-Interest identifier used for loop /
   duplicate suppression ([§12.2](#122-loop-and-duplicate-suppression)).
 * `lifetime_ms` is the Interest's lifetime (default 4000). It bounds how long a
   PIT entry and the consumer's wait persist.
-* **Selector** (when present): `min_sequence:u64` — only Data with
+* **Selector — `min_sequence`** (when present): only Data with
   `sequence ≥ min_sequence` satisfies the Interest. Used for stream fetch
   ("give me segment ≥ N").
+* **Selector — `child`** (when `LATEST`/`OLDEST`): with `can_be_prefix`, when
+  several Data match the prefix the answering node picks the highest-sequence
+  (`LATEST`) or lowest-sequence (`OLDEST`) one; only entries that carry a
+  `sequence` are candidates. Selection is best-effort **per node** — a cache
+  answers with the extreme it holds, so combine `LATEST` with `must_be_fresh`
+  to revalidate past a cache toward the producer's true latest. `child` is
+  ignored without `can_be_prefix` (an exact name has at most one match). A
+  `min_sequence` floor, if also set, still applies.
 * **Hop limit**: remaining forwarding hops. Senders **SHOULD** always include it
   (the implementation always sets bit 3 on write). Each forwarding hop
   decrements it; an Interest received with `hop_limit == 0` **MUST NOT** be

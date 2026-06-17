@@ -191,7 +191,14 @@ control: the boundary is encryption, not "don't serve it."
 
 ### 4.2 Advanced Features
 - [x] **Pub/Sub**: `Subscribe(prefix)` → proactive Data push (`rns_icn/aps.py`, `OfflineQueue` for disconnected subscribers)
-- [ ] **Selectors** (partial): `min_sequence` (`>=version`) implemented (`InterestSelector`); `latest`/`oldest` not yet
+- [x] **Selectors**: `min_sequence` (`>=version`), plus `latest`/`oldest`
+  child selectors — a `can_be_prefix` Interest can ask for the highest- or
+  lowest-`sequence` Data under a prefix (`InterestSelector.child` /
+  `ChildSelector`; `packet.py`). The answering node (cache or producer) ranks
+  matches by sequence (`ContentStore.get_prefix`), so selection is best-effort
+  per node; pair `latest` with `must_be_fresh` to revalidate past a cache.
+  Wired through `Forwarder.express`/`fetch_latest`/`fetch_oldest` and the
+  origin serve path. Self-describing on the wire (`PROTOCOL.md` §7).
 - [x] **Chunked transfer**: Large files via segmented Data + reassembly (`chunker.py`, `assembler.py`, `resource_transport.py`)
 - [ ] **Priority/QoS**: Interest priority field, router queueing
 

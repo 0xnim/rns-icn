@@ -29,6 +29,7 @@ from rns_icn.name import Name
 from rns_icn.packet import (
     APSubscribe,
     CapPeer,
+    ChildSelector,
     Data,
     DataMetadata,
     Freshness,
@@ -90,13 +91,17 @@ def build(kind: str, fields: dict[str, Any]) -> Any:
 
     if kind == "interest":
         sel = fields.get("selector_min_sequence")
+        child = ChildSelector(fields.get("selector_child", 0))
+        selector = None
+        if sel is not None or child is not ChildSelector.NONE:
+            selector = InterestSelector(min_sequence=sel, child=child)
         return Interest(
             name=build_name(fields["name"]),
             nonce=bytes.fromhex(fields["nonce"]),
             lifetime_ms=fields["lifetime_ms"],
             can_be_prefix=fields.get("can_be_prefix", False),
             must_be_fresh=fields.get("must_be_fresh", False),
-            selector=InterestSelector(min_sequence=sel) if sel is not None else None,
+            selector=selector,
             hop_limit=fields["hop_limit"],
         )
 

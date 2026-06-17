@@ -25,7 +25,7 @@ from .manifest import EntryKind, Manifest, ManifestEntry
 from .metrics import metrics
 from .name import Name
 from .offline_queue import OfflineQueue
-from .packet import APSubscribe, Data, Interest, Invalidate, parse_packet
+from .packet import APSubscribe, ChildSelector, Data, Interest, Invalidate, parse_packet
 from .pit import Pit
 from .propagation import PropagationManager
 
@@ -147,7 +147,12 @@ class ICNServer:
     def _serve_from_cs(self, interest: Interest, in_face_id: FaceId) -> Data | None:
         """Check local ContentStore for matching data."""
         if interest.can_be_prefix:
-            return self._maybe_sign(self.forwarder.cs.get_prefix(interest.name))
+            sel = interest.selector
+            return self._maybe_sign(self.forwarder.cs.get_prefix(
+                interest.name,
+                child=sel.child if sel else ChildSelector.NONE,
+                min_sequence=sel.min_sequence if sel else None,
+            ))
         return self._maybe_sign(self.forwarder.cs.get(interest.name))
 
     async def _build_manifest_data(self, include_downstream: bool = True) -> Data:

@@ -34,7 +34,13 @@ from rns_icn.manifest import (
     ManifestEntry,
 )
 from rns_icn.name import RNS_ADDR_BYTES, Name, NameError
-from rns_icn.packet import Data, DataMetadata, Interest, InterestSelector
+from rns_icn.packet import (
+    ChildSelector,
+    Data,
+    DataMetadata,
+    Interest,
+    InterestSelector,
+)
 from rns_icn.pit import Pit, PitOp
 from rns_icn.strategy import BestRoute, StrategyDecision
 
@@ -148,6 +154,55 @@ class TestContentStore:
         assert result is not None
         assert result.name in (a, b)
         assert prefix.is_prefix_of(result.name)
+
+    def test_prefix_child_latest_picks_highest_sequence(self):
+        # LATEST selector returns the highest-sequence entry under the prefix,
+        # regardless of insertion order.
+        cs = ContentStore(max_entries=10)
+        prefix = Name(rns_addr(0x01), [b"feed"])
+        v1 = Name(rns_addr(0x01), [b"feed", b"v1"])
+        v3 = Name(rns_addr(0x01), [b"feed", b"v3"])
+        v2 = Name(rns_addr(0x01), [b"feed", b"v2"])
+        # Insert out of sequence order, and so v2 is the newest *inserted*.
+        cs.insert(v1, Data.new(name=v1, content=b"a").with_sequence(1))
+        cs.insert(v3, Data.new(name=v3, content=b"c").with_sequence(3))
+        cs.insert(v2, Data.new(name=v2, content=b"b").with_sequence(2))
+        result = cs.get_prefix(prefix, child=ChildSelector.LATEST)
+        assert result is not None
+        assert result.name == v3
+        assert result.metadata.sequence == 3
+
+    def test_prefix_child_oldest_picks_lowest_sequence(self):
+        cs = ContentStore(max_entries=10)
+        prefix = Name(rns_addr(0x01), [b"feed"])
+        v1 = Name(rns_addr(0x01), [b"feed", b"v1"])
+        v3 = Name(rns_addr(0x01), [b"feed", b"v3"])
+        cs.insert(v3, Data.new(name=v3, content=b"c").with_sequence(3))
+        cs.insert(v1, Data.new(name=v1, content=b"a").with_sequence(1))
+        result = cs.get_prefix(prefix, child=ChildSelector.OLDEST)
+        assert result is not None
+        assert result.name == v1
+        assert result.metadata.sequence == 1
+
+    def test_prefix_child_latest_honours_min_sequence(self):
+        cs = ContentStore(max_entries=10)
+        prefix = Name(rns_addr(0x01), [b"feed"])
+        for i in (1, 2, 3):
+            n = Name(rns_addr(0x01), [b"feed", f"v{i}".encode()])
+            cs.insert(n, Data.new(name=n, content=b"x").with_sequence(i))
+        # Highest sequence is 3, but min_sequence filters; with floor 5 nothing
+        # qualifies even though entries exist.
+        assert cs.get_prefix(prefix, child=ChildSelector.LATEST, min_sequence=5) is None
+
+    def test_prefix_child_ignores_unsequenced_entries(self):
+        # Only sequenced entries are candidates for child selection.
+        cs = ContentStore(max_entries=10)
+        prefix = Name(rns_addr(0x01), [b"feed"])
+        plain = Name(rns_addr(0x01), [b"feed", b"plain"])
+        cs.insert(plain, Data.new(name=plain, content=b"x"))  # no sequence
+        assert cs.get_prefix(prefix, child=ChildSelector.LATEST) is None
+        # ...but the default (no child) still matches it.
+        assert cs.get_prefix(prefix) is not None
 
     def test_hits_misses(self):
         cs = ContentStore(max_entries=10)
@@ -573,6 +628,39 @@ class TestForwarder:
             results.append(data)
 
         assert len(results) == 0
+
+    @pytest.mark.asyncio
+    async def test_fetch_latest_from_cache(self):
+        """fetch_latest serves the highest-sequence cached child under a prefix."""
+        fw = Forwarder()
+        feed = Name(rns_addr(0x01), [b"feed"])
+        for i in (1, 3, 2):
+            n = Name(rns_addr(0x01), [b"feed", f"v{i}".encode()])
+            fw.cs.insert(n, Data.new(name=n, content=f"c{i}".encode()).with_sequence(i))
+        result = await fw.fetch_latest(feed, lifetime_ms=200)
+        assert result is not None
+        assert result.metadata.sequence == 3
+        assert result.content == b"c3"
+
+    @pytest.mark.asyncio
+    async def test_fetch_oldest_from_cache(self):
+        """fetch_oldest serves the lowest-sequence cached child under a prefix."""
+        fw = Forwarder()
+        feed = Name(rns_addr(0x01), [b"feed"])
+        for i in (3, 1, 2):
+            n = Name(rns_addr(0x01), [b"feed", f"v{i}".encode()])
+            fw.cs.insert(n, Data.new(name=n, content=f"c{i}".encode()).with_sequence(i))
+        result = await fw.fetch_oldest(feed, lifetime_ms=200)
+        assert result is not None
+        assert result.metadata.sequence == 1
+        assert result.content == b"c1"
+
+    @pytest.mark.asyncio
+    async def test_fetch_latest_no_route_empty(self):
+        """fetch_latest with nothing cached and no route returns None."""
+        fw = Forwarder()
+        feed = Name(rns_addr(0x01), [b"feed"])
+        assert await fw.fetch_latest(feed, lifetime_ms=200) is None
 
 
 # ── Manifest ──

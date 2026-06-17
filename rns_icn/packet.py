@@ -112,27 +112,89 @@ class PacketType(IntEnum):
 # ── InterestSelector ──
 
 
+class ChildSelector(IntEnum):
+    """Which Data answers a prefix Interest when several match.
+
+    Mirrors NDN's leftmost/rightmost child selectors, ordered by the Data
+    ``sequence`` (this protocol's version axis):
+
+      NONE   — no preference; any matching Data may answer (newest-cached wins).
+      LATEST — the highest-sequence Data available at the answering node
+               (rightmost child): "give me the newest version."
+      OLDEST — the lowest-sequence Data available (leftmost child):
+               "give me the earliest retained version."
+
+    Selection is best-effort *per node*: a cache returns the extreme it holds,
+    so pair LATEST with ``must_be_fresh`` to revalidate past a cache toward the
+    producer's true latest. Only meaningful with ``can_be_prefix``.
+    """
+    NONE = 0
+    LATEST = 1
+    OLDEST = 2
+
+
 @dataclass
 class InterestSelector:
-    """Selector for Interests — constraints on which Data satisfies the Interest.
+    """Constraints on which Data satisfies an Interest.
 
-    Wire (when present, after flags byte):
-      [min_sequence:8]
+    Wire (self-describing, present iff the Interest's ``has_selector`` flag):
+      [sel_flags:u8]
+      ( [min_sequence:u64] )?     # iff sel_flags bit 0
 
-    min_sequence: minimum sequence number accepted. Used for stream fetch:
-      'I already have segments 1-5, give me segment 6 or later.'
+    sel_flags:
+      bit 0 (0x01): has_min_sequence
+      bit 1 (0x02): child = LATEST   (mutually exclusive with bit 2)
+      bit 2 (0x04): child = OLDEST
+
+    min_sequence: minimum sequence accepted ("give me segment >= N"); drives
+      incremental stream fetch — 'I have segments 1-5, give me 6 or later.'
+    child: pick the latest/oldest match under a prefix (see ``ChildSelector``).
     """
     min_sequence: int | None = None
+    child: ChildSelector = ChildSelector.NONE
+
+    _HAS_MIN_SEQUENCE = 0x01
+    _CHILD_LATEST = 0x02
+    _CHILD_OLDEST = 0x04
+
+    def is_empty(self) -> bool:
+        """True when the selector carries no constraint (need not go on the wire)."""
+        return self.min_sequence is None and self.child is ChildSelector.NONE
 
     def to_bytes(self) -> bytes:
-        return struct.pack(">Q", self.min_sequence or 0)
+        flags = 0
+        if self.min_sequence is not None:
+            flags |= self._HAS_MIN_SEQUENCE
+        if self.child is ChildSelector.LATEST:
+            flags |= self._CHILD_LATEST
+        elif self.child is ChildSelector.OLDEST:
+            flags |= self._CHILD_OLDEST
+        buf = bytearray([flags])
+        if self.min_sequence is not None:
+            buf.extend(struct.pack(">Q", self.min_sequence))
+        return bytes(buf)
 
     @classmethod
-    def from_bytes(cls, data: bytes) -> InterestSelector:
-        if len(data) < 8:
+    def from_bytes(cls, data: bytes) -> tuple[InterestSelector, int]:
+        """Parse a selector, returning it and the number of bytes consumed."""
+        if not data:
             raise InterestError("buffer too short for selector")
-        seq = struct.unpack(">Q", data[:8])[0]
-        return cls(min_sequence=seq)
+        flags = data[0]
+        pos = 1
+        if flags & cls._CHILD_LATEST and flags & cls._CHILD_OLDEST:
+            raise InterestError("selector sets both LATEST and OLDEST")
+        min_sequence = None
+        if flags & cls._HAS_MIN_SEQUENCE:
+            if pos + 8 > len(data):
+                raise InterestError("buffer too short for selector min_sequence")
+            min_sequence = struct.unpack(">Q", data[pos:pos + 8])[0]
+            pos += 8
+        child = ChildSelector.NONE
+        if flags & cls._CHILD_LATEST:
+            child = ChildSelector.LATEST
+        elif flags & cls._CHILD_OLDEST:
+            child = ChildSelector.OLDEST
+        return cls(min_sequence=min_sequence, child=child), pos
 
 
 # ── Interest ──
@@ -194,7 +256,8 @@ class Interest:
             lifetime_ms=self.lifetime_ms,
             can_be_prefix=self.can_be_prefix,
             must_be_fresh=self.must_be_fresh,
-            selector=InterestSelector(min_sequence=self.selector.min_sequence) if self.selector else None,
+            selector=InterestSelector(min_sequence=self.selector.min_sequence,
+                                      child=self.selector.child) if self.selector else None,
             hop_limit=self.hop_limit,
         )
 
@@ -212,12 +275,14 @@ class Interest:
             flags |= 0x01
         if self.must_be_fresh:
             flags |= 0x02
-        if self.selector is not None:
+        # An empty selector carries no constraint, so it stays off the wire.
+        has_selector = self.selector is not None and not self.selector.is_empty()
+        if has_selector:
             flags |= 0x04
         flags |= 0x08  # always carry hop_limit
         buf.append(flags)
-        if self.selector is not None:
-            buf.extend(self.selector.to_bytes())
+        if has_selector:
+            buf.extend(self.selector.to_bytes())  # type: ignore[union-attr]
         buf.append(self.hop_limit & 0xFF)
         return bytes(buf)
 
@@ -249,10 +314,8 @@ class Interest:
         pos += 1
         selector = None
         if flags & 0x04:
-            if pos + 8 > len(data):
-                raise InterestError("buffer too short for selector")
-            selector = InterestSelector.from_bytes(data[pos:pos + 8])
-            pos += 8
+            selector, consumed = InterestSelector.from_bytes(data[pos:])
+            pos += consumed
         hop_limit = DEFAULT_HOP_LIMIT
         if flags & 0x08:
             if pos + 1 > len(data):

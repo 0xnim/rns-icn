@@ -155,7 +155,27 @@
         "selector_min_sequence": 6,
         "hop_limit": 16
       },
-      "wire_hex": "0101190210ad0324ff38c1c06511d1246eb4c7d7910673747265616d111213141516171800001f400c000000000000000610"
+      "wire_hex": "0101190210ad0324ff38c1c06511d1246eb4c7d7910673747265616d111213141516171800001f400c01000000000000000610"
+    },
+    {
+      "name": "interest/child-latest",
+      "kind": "interest",
+      "exact": true,
+      "fields": {
+        "name": {
+          "components": [
+            "ad0324ff38c1c06511d1246eb4c7d791",
+            "66656564"
+          ],
+          "content_hash": null
+        },
+        "nonce": "3132333435363738",
+        "lifetime_ms": 4000,
+        "can_be_prefix": true,
+        "selector_child": 1,
+        "hop_limit": 16
+      },
+      "wire_hex": "0101170210ad0324ff38c1c06511d1246eb4c7d7910466656564313233343536373800000fa00d0210"
     },
     {
       "name": "interest/prefix-and-fresh",

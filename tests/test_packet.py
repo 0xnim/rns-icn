@@ -4,6 +4,7 @@ import pytest
 
 from rns_icn.name import RNS_ADDR_BYTES, Name
 from rns_icn.packet import (
+    ChildSelector,
     Data,
     DataMetadata,
     Freshness,
@@ -130,31 +131,65 @@ class TestInterest:
 
 
 class TestInterestSelector:
-    def test_default_min_sequence(self):
+    def test_defaults(self):
         sel = InterestSelector()
         assert sel.min_sequence is None
+        assert sel.child is ChildSelector.NONE
+        assert sel.is_empty()
 
     def test_round_trip(self):
         sel = InterestSelector(min_sequence=42)
-        data = sel.to_bytes()
-        parsed = InterestSelector.from_bytes(data)
+        parsed, consumed = InterestSelector.from_bytes(sel.to_bytes())
         assert parsed.min_sequence == 42
+        assert parsed.child is ChildSelector.NONE
+        assert consumed == 9  # 1 flags byte + 8 min_sequence
 
     def test_round_trip_zero(self):
         sel = InterestSelector(min_sequence=0)
-        data = sel.to_bytes()
-        parsed = InterestSelector.from_bytes(data)
+        parsed, consumed = InterestSelector.from_bytes(sel.to_bytes())
         assert parsed.min_sequence == 0
+        assert consumed == 9
 
     def test_large_sequence(self):
         sel = InterestSelector(min_sequence=2**48 + 1)
-        data = sel.to_bytes()
-        parsed = InterestSelector.from_bytes(data)
+        parsed, _ = InterestSelector.from_bytes(sel.to_bytes())
         assert parsed.min_sequence == 2**48 + 1
 
-    def test_short_buffer(self):
+    def test_child_latest_round_trip(self):
+        sel = InterestSelector(child=ChildSelector.LATEST)
+        assert not sel.is_empty()
+        data = sel.to_bytes()
+        assert len(data) == 1  # flags only, no min_sequence
+        parsed, consumed = InterestSelector.from_bytes(data)
+        assert parsed.child is ChildSelector.LATEST
+        assert parsed.min_sequence is None
+        assert consumed == 1
+
+    def test_child_oldest_round_trip(self):
+        sel = InterestSelector(child=ChildSelector.OLDEST)
+        parsed, _ = InterestSelector.from_bytes(sel.to_bytes())
+        assert parsed.child is ChildSelector.OLDEST
+
+    def test_child_and_min_sequence_combined(self):
+        sel = InterestSelector(min_sequence=12, child=ChildSelector.LATEST)
+        parsed, consumed = InterestSelector.from_bytes(sel.to_bytes())
+        assert parsed.min_sequence == 12
+        assert parsed.child is ChildSelector.LATEST
+        assert consumed == 9
+
+    def test_empty_buffer_raises(self):
         with pytest.raises(InterestError):
-            InterestSelector.from_bytes(b"\x00\x00")
+            InterestSelector.from_bytes(b"")
+
+    def test_truncated_min_sequence_raises(self):
+        # flags claim has_min_sequence (bit 0) but the 8-byte body is missing.
+        with pytest.raises(InterestError):
+            InterestSelector.from_bytes(b"\x01\x00\x00")
+
+    def test_both_children_rejected(self):
+        # A selector that sets both LATEST and OLDEST is malformed.
+        with pytest.raises(InterestError):
+            InterestSelector.from_bytes(bytes([0x02 | 0x04]))
 
 
 class TestInterestWithSelector:
@@ -199,6 +234,46 @@ class TestInterestWithSelector:
         assert interest.selector.min_sequence == 10
         parsed = Interest.from_bytes(interest.to_bytes())
         assert parsed.selector.min_sequence == 10
+
+    def test_round_trip_child_latest(self):
+        name = Name(rns_addr(0x01), [b"feed"])
+        interest = Interest(
+            name=name, can_be_prefix=True,
+            selector=InterestSelector(child=ChildSelector.LATEST),
+        )
+        parsed = Interest.from_bytes(interest.to_bytes())
+        assert parsed.selector is not None
+        assert parsed.selector.child is ChildSelector.LATEST
+        assert parsed.selector.min_sequence is None
+
+    def test_round_trip_child_and_hop_limit(self):
+        # The variable-length selector must not desync the trailing hop_limit.
+        name = Name(rns_addr(0x01), [b"feed"])
+        interest = Interest(
+            name=name, can_be_prefix=True, hop_limit=4,
+            selector=InterestSelector(min_sequence=2, child=ChildSelector.OLDEST),
+        )
+        parsed = Interest.from_bytes(interest.to_bytes())
+        assert parsed.hop_limit == 4
+        assert parsed.selector.min_sequence == 2
+        assert parsed.selector.child is ChildSelector.OLDEST
+
+    def test_clone_preserves_child(self):
+        name = Name(rns_addr(0x01), [b"feed"])
+        interest = Interest(
+            name=name, selector=InterestSelector(child=ChildSelector.LATEST)
+        )
+        cloned = interest.clone()
+        assert cloned.selector is not None
+        assert cloned.selector.child is ChildSelector.LATEST
+
+    def test_empty_selector_omitted_from_wire(self):
+        # An all-default selector carries no constraint and must not set the
+        # has_selector flag; it round-trips back to None.
+        name = Name(rns_addr(0x01), [b"t"])
+        interest = Interest(name=name, selector=InterestSelector())
+        parsed = Interest.from_bytes(interest.to_bytes())
+        assert parsed.selector is None
 
 
 class TestData:

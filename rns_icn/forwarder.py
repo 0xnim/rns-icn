@@ -15,7 +15,7 @@ from .content_store import ContentStore
 from .face import Face, FaceId
 from .fib import Fib
 from .name import Name
-from .packet import Data, Interest, InterestSelector
+from .packet import ChildSelector, Data, Interest, InterestSelector
 from .pit import Pit
 from .strategy import BestRoute, Strategy, StrategyDecision
 
@@ -68,9 +68,17 @@ class Forwarder:
             return None
         self.pit.record_nonce(in_face, interest.nonce)
 
-        # 2. Check CS
-        cs_hit = (self.cs.get_prefix(interest.name) if interest.can_be_prefix
-                  else self.cs.get(interest.name))
+        # 2. Check CS. On a prefix Interest the selector decides which match
+        #    answers (latest/oldest by sequence, and any min_sequence floor).
+        if interest.can_be_prefix:
+            sel = interest.selector
+            cs_hit = self.cs.get_prefix(
+                interest.name,
+                child=sel.child if sel else ChildSelector.NONE,
+                min_sequence=sel.min_sequence if sel else None,
+            )
+        else:
+            cs_hit = self.cs.get(interest.name)
 
         # 3. Check PIT
         pit_hit = self.pit.find(interest.name)
@@ -257,6 +265,51 @@ class Forwarder:
         if matched is not None or cache_unsolicited:
             self.cs.insert(data.name, data)
         self.pit.purge_expired()
+
+    async def fetch_latest(
+        self,
+        name: Name,
+        in_face: FaceId = 0,
+        lifetime_ms: int = 4000,
+        must_be_fresh: bool = False,
+    ) -> Data | None:
+        """Fetch the highest-sequence Data under ``name`` (the ``latest`` selector).
+
+        Best-effort per node: a cache answers with the newest version it holds.
+        Set ``must_be_fresh`` to revalidate past stale caches toward the producer.
+        """
+        return await self._fetch_child(
+            name, ChildSelector.LATEST, in_face, lifetime_ms, must_be_fresh
+        )
+
+    async def fetch_oldest(
+        self,
+        name: Name,
+        in_face: FaceId = 0,
+        lifetime_ms: int = 4000,
+        must_be_fresh: bool = False,
+    ) -> Data | None:
+        """Fetch the lowest-sequence Data under ``name`` (the ``oldest`` selector)."""
+        return await self._fetch_child(
+            name, ChildSelector.OLDEST, in_face, lifetime_ms, must_be_fresh
+        )
+
+    async def _fetch_child(
+        self,
+        name: Name,
+        child: ChildSelector,
+        in_face: FaceId,
+        lifetime_ms: int,
+        must_be_fresh: bool,
+    ) -> Data | None:
+        interest = Interest(
+            name=name,
+            lifetime_ms=lifetime_ms,
+            can_be_prefix=True,
+            must_be_fresh=must_be_fresh,
+            selector=InterestSelector(child=child),
+        )
+        return await self.express(interest, in_face)
 
     async def stream_fetch(
         self,
