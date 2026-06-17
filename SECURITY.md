@@ -8,8 +8,14 @@ vulnerabilities in these mechanisms seriously.
 
 **Please do not open a public issue for a security vulnerability.**
 
-Report privately to **niklas@wojtkowiak.com** (or, on the GitHub mirror, via
-*Security → Report a vulnerability* / a private security advisory). Include:
+Report privately through any of these channels:
+
+- **Email** — niklas@wojtkowiak.com
+- **Matrix** — `@nim:idk.yachts` (please use an **end-to-end-encrypted** room)
+- **LXMF** — `a7c02181dd71d61d2d6d8a8bb9fee99a`
+- **GitHub mirror** — *Security → Report a vulnerability* (private security advisory)
+
+Include:
 
 - a description of the issue and its impact,
 - the affected component(s) and protocol version,
