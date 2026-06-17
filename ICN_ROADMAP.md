@@ -256,6 +256,16 @@ control: the boundary is encryption, not "don't serve it."
   - *Router crash + multipath failover* — a client routes the origin via a
     primary + backup router; the **primary is killed** mid-test and the
     forwarder falls through to the backup so the fetch still completes.
+  - *Held partition + cache availability* — the router runs in a `manual`
+    recovery mode (`DROP_UPSTREAM` does **not** auto-re-install off the origin's
+    announce), so a partition stays open under test. While partitioned, a **cold
+    second client** (empty CS) still gets previously-cached content served from
+    the **router's cache** — ICN's core partition-availability property — while a
+    fresh (uncached) name **fails cleanly within its lifetime** rather than
+    black-holing; an explicit `HEAL_UPSTREAM` then re-installs the route and a
+    fresh Interest reaches the origin again. This is the one property the
+    re-announce test can't assert (its auto-recovery races the "must-fail-while-
+    down" check). `TestPartitionTolerance` in `tests/test_chaos.py`.
   - These exercise the real `RNS.Link` close hook and announce-driven re-install
     that the in-process unit tests (`test_dynamic_fib`/`test_multipath`) mock.
     Doing so surfaced a real bug: `PeerDiscoveryManager`'s announce
@@ -264,9 +274,20 @@ control: the boundary is encryption, not "don't serve it."
     dynamic-FIB re-install had never actually fired over real RNS. Fixed
     (`peer_discovery.py`), with a fast regression test asserting the filter
     hashes to the real destination hash (`test_peer_discovery.py`).
-  - Partition testing still TODO.
 - [ ] Interop test vectors
-- [ ] Load testing (10K+ concurrent fetches)
+- [x] **Load testing** (10K+ concurrent fetches): in-process load tests drive the
+  forwarding core (`Forwarder`/`Pit`/`CS`/strategy) against a mock upstream face,
+  so thousands of concurrent Interests run in well under a second — fast enough to
+  assert the properties the "PIT state explosion" risk is about
+  (`tests/test_load.py`, scale via `ICN_LOAD_N`, default 1000): N distinct
+  concurrent fetches all resolve with no PIT leak; a duplicate flood **aggregates
+  to a single upstream send**; and a distinct flood far exceeding `pit_max` stays
+  **bounded** (nearest-expiry eviction fires, peak ≤ cap) and fully reclaims. At
+  the `ICN_LOAD_N=10000` roadmap target this also surfaced an **O(N²)** in the
+  forward path under high concurrency — every completing Interest calls
+  `Pit.purge_expired()` (a full-PIT scan) — so throughput degrades superlinearly
+  with the in-flight set; correctness holds. Worth an event-driven (per-entry
+  expiry) cleanup before claiming high-concurrency throughput.
 
 **Deliverable:** Production-ready ICN protocol v1.0 with SDKs, docs, compliance.
 

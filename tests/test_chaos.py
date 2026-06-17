@@ -197,6 +197,121 @@ class TestMultipathFailover(_ChaosBase):
         assert bytes.fromhex(res["content_hex"]) == expected_content(label)
 
 
+class TestPartitionTolerance(_ChaosBase):
+    """A *held* partition: cache stays available, uncached fails cleanly, heal recovers.
+
+    ``TestReannounceRecovery`` drops the upstream and lets the origin's announce
+    cadence auto-recover it — which is why it can't assert "uncached must fail
+    while down" (recovery races the assertion). Here the router runs in ``manual``
+    mode, so a ``DROP_UPSTREAM`` holds the partition open until an explicit
+    ``HEAL_UPSTREAM``. That stable window lets us assert the three properties that
+    matter under partition:
+
+    1. **Cache availability** — content already cached at the router is still
+       served to a *cold* (empty-CS) client while the origin is unreachable. This
+       is ICN's core partition win: a cache satisfies the Interest, no origin
+       round-trip. A cold second client is required because the warming client
+       caches the Data itself (``forwarder.py`` reverse-path insert), so a re-fetch
+       from the *same* client would never reach the router.
+    2. **Clean failure** — a fresh (uncached-everywhere) name fails within its
+       lifetime rather than black-holing, because the dead upstream's route was
+       withdrawn.
+    3. **Recovery** — after ``HEAL_UPSTREAM`` re-installs the route, a fresh name
+       reaches the origin again.
+    """
+
+    def _start_cold_client(self, name: str, origin_identity_path: str,
+                           router_port: int, router_hexhash: str,
+                           router_identity_path: str) -> Node:
+        """Spawn a fresh client (empty CS) routed at the origin via the router."""
+        client = self._spawn([
+            PY, CLIENT_SCRIPT, self._cfg(name), origin_identity_path,
+            f'[{{"port": {router_port}, "hexhash": "{router_hexhash}", '
+            f'"identity_path": "{router_identity_path}", "cost": 10}}]',
+        ])
+        ready = client.read_until("CLIENT_READY ", timeout=120)
+        assert router_hexhash in ready["connected"], "cold client never linked to router"
+        return client
+
+    def test_cache_serves_during_partition(self):
+        origin_port = free_port()
+        router_port = free_port()
+
+        origin = self.start_origin(self._cfg("origin"), origin_port)
+        # "manual" mode: a DROP_UPSTREAM holds the partition open (no announce-
+        # driven re-install) until we explicitly HEAL_UPSTREAM.
+        router = self._spawn([
+            PY, ROUTER_SCRIPT, self._cfg("router"), str(router_port),
+            str(origin_port), origin["hexhash"], origin["identity_path"], "manual",
+        ])
+        router_info = router.read_until("ROUTER_READY ", timeout=120)
+
+        # A warm client fetches a label through the healthy two-hop path, caching
+        # it at the router (and at the warm client itself).
+        warm = self._start_cold_client(
+            "warm", origin["identity_path"], router_port,
+            router_info["hexhash"], router_info["identity_path"],
+        )
+        cached_label = self.next_label()
+        res = warm.fetch(cached_label)
+        assert res["ok"], "baseline fetch failed before partition"
+        assert bytes.fromhex(res["content_hex"]) == expected_content(cached_label)
+
+        # Partition: drop the router's upstream and confirm it stays withdrawn
+        # (manual mode → no auto re-install).
+        router.send("DROP_UPSTREAM")
+        router.read_until("DROPPED ", timeout=30)
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            if router_route_count(router) == 0:
+                break
+            time.sleep(1)
+        assert router_route_count(router) == 0, "route was not withdrawn on partition"
+        # Hold briefly and re-check: manual mode must NOT auto-recover.
+        time.sleep(8)
+        assert router_route_count(router) == 0, "partition auto-recovered in manual mode"
+
+        # A cold client (empty CS) joins during the partition. The previously
+        # cached label is served from the router's cache even though the origin is
+        # unreachable — the partition-availability property.
+        cold = self._start_cold_client(
+            "cold", origin["identity_path"], router_port,
+            router_info["hexhash"], router_info["identity_path"],
+        )
+        res = cold.fetch(cached_label)
+        assert res["ok"], "cached content was not served during partition"
+        assert bytes.fromhex(res["content_hex"]) == expected_content(cached_label)
+
+        # A fresh (uncached) name has no path to the origin: it must fail within
+        # its lifetime, not black-hole.
+        fresh = self.next_label()
+        res = cold.fetch(fresh, lifetime_ms=8000)
+        assert not res["ok"], "uncached fetch unexpectedly succeeded during partition"
+
+        # Heal the partition deterministically, then confirm the route is back.
+        router.send("HEAL_UPSTREAM")
+        router.read_until("HEALED ", timeout=60)
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            if router_route_count(router) >= 1:
+                break
+            time.sleep(1)
+        assert router_route_count(router) >= 1, "route was not re-installed on heal"
+
+        # A fresh name now reaches the origin again through the healed route.
+        recovered = False
+        deadline = time.time() + 60
+        while time.time() < deadline:
+            label = self.next_label()
+            res = cold.fetch(label, lifetime_ms=12000)
+            if res["ok"]:
+                assert bytes.fromhex(res["content_hex"]) == expected_content(label)
+                recovered = True
+                break
+            time.sleep(2)
+        assert recovered, "fetch never succeeded after partition heal"
+
+
 def router_route_count(router: Node) -> int:
     """Ask a chaos router for its live origin next-hop count."""
     router.send("ROUTES")

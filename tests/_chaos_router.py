@@ -19,18 +19,30 @@ one command per line from stdin:
                     event RNS keepalive would eventually raise on a dead peer,
                     injected deterministically so the test doesn't wait minutes
                     for keepalive. Fires the real close hook → route withdrawn.
+    HEAL_UPSTREAM   re-link to the origin and re-install its route (deterministic
+                    recovery). Print ``HEALED <json>``. Only useful in ``manual``
+                    mode, where announce-driven re-install is *not* wired, so a
+                    drop holds open as a sustained partition until this fires.
     ROUTES          print ``ROUTES <json>`` with the live next-hop count for the
                     origin prefix (0 after a withdraw, 1 after reinstall).
     QUIT            shut down and exit.
 
-Recovery is *not* injected: the origin keeps announcing on its real 5s cadence,
-and ``_wire_route_reinstall`` re-establishes the route off that announce.
+Recovery mode is the optional 6th argument:
+
+    auto    (default) the origin keeps announcing on its real 5s cadence and
+            ``_wire_route_reinstall`` re-establishes the route off that announce
+            — exercises the production announce-driven re-install path.
+    manual  announce-driven re-install is *not* wired, so a ``DROP_UPSTREAM``
+            holds open a sustained partition (route stays withdrawn) until an
+            explicit ``HEAL_UPSTREAM``. Lets a test assert partition behaviour
+            (cache still serves, uncached fails cleanly) without recovery racing
+            the assertions.
 
 Not a test module — the leading underscore keeps pytest from collecting it.
 Invoked as::
 
     python tests/_chaos_router.py <configdir> <listen_port> <origin_port> \
-        <origin_hexhash> <origin_identity_path>
+        <origin_hexhash> <origin_identity_path> [auto|manual]
 """
 
 import asyncio
@@ -88,6 +100,7 @@ async def main() -> None:
     origin_port = int(sys.argv[3])
     origin_hexhash = sys.argv[4]
     origin_identity_path = sys.argv[5]
+    mode = sys.argv[6] if len(sys.argv) > 6 else "auto"
 
     _write_config(configdir, listen_port, origin_port)
     RNS.Reticulum(configdir=configdir)
@@ -127,9 +140,12 @@ async def main() -> None:
         await server.shutdown()
         return
 
-    # Withdraw on link drop happens automatically via the close hook; wire the
-    # re-install so a later origin re-announce restores the route.
-    _wire_route_reinstall(server, config)
+    # Withdraw on link drop happens automatically via the close hook. In "auto"
+    # mode, wire the announce-driven re-install so a later origin re-announce
+    # restores the route. In "manual" mode, leave it unwired so a drop holds open
+    # a sustained partition until an explicit HEAL_UPSTREAM.
+    if mode != "manual":
+        _wire_route_reinstall(server, config)
 
     print(
         "ROUTER_READY "
@@ -158,6 +174,16 @@ async def main() -> None:
                         face.link.teardown()
                         dropped += 1
                 print(f"DROPPED {json.dumps({'faces': dropped})}", flush=True)
+            elif cmd == "HEAL_UPSTREAM":
+                # Deterministic recovery: re-link to the origin and re-install
+                # its route, retrying while the link/path settles.
+                healed: list = []
+                for _ in range(30):
+                    healed = await _install_peer_routes(server, config)
+                    if healed:
+                        break
+                    await asyncio.sleep(1)
+                print(f"HEALED {json.dumps({'routes': len(healed)})}", flush=True)
             elif cmd == "ROUTES":
                 print(
                     "ROUTES " + json.dumps({"count": len(_origin_routes(server, origin_addr))}),
