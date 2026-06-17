@@ -244,7 +244,27 @@ control: the boundary is encryption, not "don't serve it."
 
 ### 4.4 Testing & Compliance
 - [ ] Integration test suite (partial): real-RNS end-to-end tests (2-node + 3-node multi-hop over localhost TCP), not yet a multi-node testnet sim
-- [ ] Chaos testing (link loss, router crash, partition)
+- [x] **Chaos testing** (link loss, router crash) — real-RNS fault-injection
+  tests spawning ICN nodes as separate Reticulum instances over localhost TCP
+  (`tests/test_chaos.py`, gated on `RNS_INTEGRATION=1`; harness in
+  `tests/_chaos_harness.py` + `_chaos_{origin,router,client}.py`):
+  - *Link loss + re-announce recovery* — a router's upstream link is torn down
+    (the same close event keepalive raises on a dead peer, injected
+    deterministically); the route is **withdrawn** (verified, stops
+    black-holing) then **re-installed** off the origin's real announce cadence,
+    and a fresh (uncached) Interest reaches the origin again.
+  - *Router crash + multipath failover* — a client routes the origin via a
+    primary + backup router; the **primary is killed** mid-test and the
+    forwarder falls through to the backup so the fetch still completes.
+  - These exercise the real `RNS.Link` close hook and announce-driven re-install
+    that the in-process unit tests (`test_dynamic_fib`/`test_multipath`) mock.
+    Doing so surfaced a real bug: `PeerDiscoveryManager`'s announce
+    `aspect_filter` used `app/aspect` (slash) where RNS hashes the dotted
+    `app.aspect`, so **no announce ever matched** — peer discovery and
+    dynamic-FIB re-install had never actually fired over real RNS. Fixed
+    (`peer_discovery.py`), with a fast regression test asserting the filter
+    hashes to the real destination hash (`test_peer_discovery.py`).
+  - Partition testing still TODO.
 - [ ] Interop test vectors
 - [ ] Load testing (10K+ concurrent fetches)
 

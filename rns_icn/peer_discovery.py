@@ -124,8 +124,14 @@ class PeerDiscoveryManager:
         try:
             # RNS v1.2.8 API: register_announce_handler takes a single handler
             # object with aspect_filter + received_announce callback
+            # RNS matches an announce handler by hashing its aspect_filter with
+            # the announced identity (Transport._handle_announce →
+            # hash_from_name_and_identity) and comparing to the destination hash.
+            # That name is dotted ("icn.default"), so the filter MUST use a dot,
+            # not a slash — a slash hashes to a different value and silently
+            # matches nothing, so no announce is ever delivered.
             handler = _AnnounceHandler(
-                aspect_filter=f"{app_name}/{aspect}",
+                aspect_filter=f"{app_name}.{aspect}",
                 on_announce=self._on_announce,
             )
             RNS.Transport.register_announce_handler(handler)

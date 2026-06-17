@@ -165,6 +165,37 @@ class TestPeerDiscoveryManager:
         assert manager.peer_count() == 0
         assert manager.get_peers() == {}
 
+    def test_start_aspect_filter_matches_real_destination_hash(self, manager, monkeypatch):
+        """Regression: the registered aspect_filter must hash (with the announcer
+        identity) to the *same* value RNS derives for the server's destination.
+
+        RNS matches announce handlers via
+        ``hash_from_name_and_identity(handler.aspect_filter, identity)`` against
+        the destination hash. The destination name is dotted (``icn.default``),
+        so a slashed filter (``icn/default``) hashes to a different value and
+        silently delivers no announces — invisible to every test that calls
+        ``_on_announce`` directly. Spawning real nodes showed peer discovery and
+        dynamic-FIB re-install never fired over real RNS until this was fixed.
+        """
+        import RNS
+
+        captured = {}
+        monkeypatch.setattr(
+            RNS.Transport, "register_announce_handler",
+            lambda handler: captured.setdefault("handler", handler),
+        )
+
+        manager.start(app_name="icn", aspect="default")
+        handler = captured["handler"]
+
+        identity = RNS.Identity()
+        expected = RNS.Destination.hash(identity, "icn", "default")
+        derived = RNS.Destination.hash_from_name_and_identity(handler.aspect_filter, identity)
+        assert derived == expected, (
+            f"aspect_filter {handler.aspect_filter!r} does not match the real "
+            f"destination hash — no announce would ever be delivered"
+        )
+
     def test_on_announce_new_peer(self, manager):
         """A new announce creates a PeerInfo entry."""
         dest_hash = b"\xaa" * 16
