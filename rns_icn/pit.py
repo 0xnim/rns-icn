@@ -81,6 +81,17 @@ class Pit:
             return list(entry.in_faces)
         return None
 
+    def remove(self, name: Name) -> PitEntry | None:
+        """Remove and return a single entry by name (O(1)).
+
+        The forward path removes exactly the entry it just satisfied or gave up
+        on, instead of a full-table ``purge_expired`` scan per completion (which
+        made the forwarder O(n²) in the in-flight set under high concurrency).
+        Any entry that expires without an owner removing it is still reclaimed by
+        the periodic ``purge_expired`` sweep.
+        """
+        return self._entries.pop(name, None)
+
     def purge_expired(self) -> list[PitEntry]:
         now = time.monotonic()
         expired = [n for n, e in self._entries.items()

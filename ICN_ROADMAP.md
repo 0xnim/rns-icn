@@ -282,12 +282,18 @@ control: the boundary is encryption, not "don't serve it."
   (`tests/test_load.py`, scale via `ICN_LOAD_N`, default 1000): N distinct
   concurrent fetches all resolve with no PIT leak; a duplicate flood **aggregates
   to a single upstream send**; and a distinct flood far exceeding `pit_max` stays
-  **bounded** (nearest-expiry eviction fires, peak ≤ cap) and fully reclaims. At
-  the `ICN_LOAD_N=10000` roadmap target this also surfaced an **O(N²)** in the
-  forward path under high concurrency — every completing Interest calls
-  `Pit.purge_expired()` (a full-PIT scan) — so throughput degrades superlinearly
-  with the in-flight set; correctness holds. Worth an event-driven (per-entry
-  expiry) cleanup before claiming high-concurrency throughput.
+  **bounded** (nearest-expiry eviction fires, peak ≤ cap) and fully reclaims.
+  Running at the `ICN_LOAD_N=10000` target surfaced — and the fix below
+  resolved — two forward-path inefficiencies:
+  - **O(N²) PIT cleanup**: every completing Interest called `Pit.purge_expired()`
+    (a full-table scan + nonce-dict rebuild) just to drop the one entry it
+    finished with. Replaced with an O(1) `Pit.remove(name)` on the hot path; the
+    periodic background sweep keeps `purge_expired` for any orphaned entry.
+  - **Redundant CS write**: `_forward_one` re-`insert`ed each result that
+    `receive_data` had already cached (the only path that resolves the PIT
+    notifier), doubling the SQLite writes per fetch. Dropped.
+  Together these took the 10K-fetch run from ~650 to ~3,400 fetch/s (5×) with no
+  behaviour change — verified by the full suite + real-RNS chaos tests.
 
 **Deliverable:** Production-ready ICN protocol v1.0 with SDKs, docs, compliance.
 

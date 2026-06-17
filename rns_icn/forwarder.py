@@ -179,8 +179,7 @@ class Forwarder:
 
         face = self._faces.get(out_face_id)
         if face is None:
-            self.pit.satisfy(name)
-            self.pit.purge_expired()
+            self.pit.remove(name)
             return None
 
         # Send Interest bytes out via the face, then wait on PIT notifier.
@@ -197,8 +196,7 @@ class Forwarder:
                 fut, timeout=interest.lifetime_ms / 1000.0
             )
         except asyncio.TimeoutError:
-            self.pit.satisfy(name)
-            self.pit.purge_expired()
+            self.pit.remove(name)
             if isinstance(self.strategy, BestRoute):
                 self.strategy.record_failure(out_face_id)
             return None
@@ -206,8 +204,7 @@ class Forwarder:
         if result is _NACK:
             # Upstream explicitly cannot satisfy this Interest — fail over to the
             # next backup face *now* instead of waiting out the lifetime.
-            self.pit.satisfy(name)
-            self.pit.purge_expired()
+            self.pit.remove(name)
             if isinstance(self.strategy, BestRoute):
                 self.strategy.record_failure(out_face_id)
             return None
@@ -215,13 +212,13 @@ class Forwarder:
         if result is not None:
             if isinstance(self.strategy, BestRoute):
                 self.strategy.record_success(out_face_id)
-            self.cs.insert(result.name, result)
-            self.pit.satisfy(name)
-            self.pit.purge_expired()
+            # No cs.insert here: this result was delivered by receive_data() (the
+            # only thing that resolves the PIT notifier), which already cached it.
+            # Re-inserting would be a redundant second SQLite write per fetch.
+            self.pit.remove(name)
             return result
 
-        self.pit.satisfy(name)
-        self.pit.purge_expired()
+        self.pit.remove(name)
         return None
 
     def _schedule_revalidation(self, interest: Interest, in_face: FaceId,
@@ -302,7 +299,7 @@ class Forwarder:
             self._notify_waiters(pit_name, data)
         if matched is not None or cache_unsolicited:
             self.cs.insert(data.name, data)
-        self.pit.purge_expired()
+        self.pit.remove(pit_name)
         if self._data_callback is not None:
             self._data_callback(data)
 
