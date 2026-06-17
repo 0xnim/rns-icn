@@ -231,7 +231,9 @@ control: the boundary is encryption, not "don't serve it."
   served by the signed latest pointer (above) and the signed manifest/catalog
   (§4.2 manifests), not by richer selectors.
 - [x] **Chunked transfer**: Large files via segmented Data + reassembly (`chunker.py`, `assembler.py`, `resource_transport.py`)
-- [ ] **Priority/QoS**: Interest priority field, router queueing
+- [ ] **Priority/QoS** — ⏸️ *deferred (revisit)*: ~~Interest priority field,
+  router queueing~~. Parked for later, **not dropped** — a temporary deferral
+  (still an open `[ ]` item), unlike the design-rejected items in §3.4.
 
 ### 4.3 Developer Experience
 - [ ] SDKs: Python, Rust, Go, TypeScript (Python only)
