@@ -199,6 +199,25 @@ control: the boundary is encryption, not "don't serve it."
   per node; pair `latest` with `must_be_fresh` to revalidate past a cache.
   Wired through `Forwarder.express`/`fetch_latest`/`fetch_oldest` and the
   origin serve path. Self-describing on the wire (`PROTOCOL.md` §7).
+- [x] **Verifiable latest-version discovery (RDR-style)**: because a cache's
+  `latest` ranking is *unverifiable* (it can withhold a newer version —
+  exactly why NDN deprecated selector-based discovery), a producer publishes a
+  signed **latest pointer** at a reserved name under each collection prefix
+  (`rns_icn/discovery.py`, `META_LABEL`). It names the current latest,
+  content-hash pinned. `ICNClient.fetch_latest` fetches the pointer with
+  `must_be_fresh` (so a stale cache revalidates it to the origin), verifies the
+  producer signature, then fetches the exact pinned target — making "latest" a
+  producer assertion and engaging rollback protection on the pointer. Falls
+  back to the best-effort `latest` selector only when no pointer exists. No
+  protocol-version bump (a pointer is an ordinary signed Data at a reserved
+  name; labels beginning `0x00` are reserved). Producer side:
+  `RNSICNServer.publish_content` (`meta_freshness_period` config).
+- **Non-goal — `Exclude`/enumeration selectors** (NDN's `Exclude`,
+  `MinSuffixComponents`): deliberately not implemented. They are the
+  selector-discovery footgun NDN walked back — cache-poisoning surface and
+  namespace enumeration with no verifiable answer. Authenticated discovery is
+  served by the signed latest pointer (above) and the signed manifest/catalog
+  (§4.2 manifests), not by richer selectors.
 - [x] **Chunked transfer**: Large files via segmented Data + reassembly (`chunker.py`, `assembler.py`, `resource_transport.py`)
 - [ ] **Priority/QoS**: Interest priority field, router queueing
 

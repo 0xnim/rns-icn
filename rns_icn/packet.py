@@ -124,9 +124,13 @@ class ChildSelector(IntEnum):
       OLDEST — the lowest-sequence Data available (leftmost child):
                "give me the earliest retained version."
 
-    Selection is best-effort *per node*: a cache returns the extreme it holds,
-    so pair LATEST with ``must_be_fresh`` to revalidate past a cache toward the
-    producer's true latest. Only meaningful with ``can_be_prefix``.
+    Selection is best-effort *per node* and the ranking is **unverifiable**: a
+    cache returns the extreme it holds and may withhold a newer version a
+    consumer can't detect (the reason NDN deprecated selector-based discovery).
+    Pair LATEST with ``must_be_fresh`` to revalidate past a cache, but for an
+    *authenticated* latest use the producer-signed pointer in ``rns_icn.discovery``
+    (``ICNClient.fetch_latest``), which falls back to this selector only when no
+    pointer exists. Only meaningful with ``can_be_prefix``.
     """
     NONE = 0
     LATEST = 1

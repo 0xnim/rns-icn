@@ -9,7 +9,7 @@ from pathlib import Path
 
 import RNS
 
-from . import access
+from . import access, discovery
 from .config import ClientConfig
 from .face import LinkFace
 from .forwarder import Forwarder
@@ -18,7 +18,7 @@ from .link_pool import LinkPool
 from .manifest import Manifest, ManifestEntry
 from .metrics import metrics
 from .name import Name
-from .packet import Data, Interest
+from .packet import ChildSelector, Data, Interest, InterestSelector
 
 
 class ICNClient:
@@ -118,6 +118,30 @@ class ICNClient:
         Verified Data is returned only after its signature and rollback checks
         pass; encrypted content is decrypted in place when a capability is held.
         """
+        return await self._fetch_verified(
+            name, peer_hash, timeout=timeout, max_retries=max_retries
+        )
+
+    async def _fetch_verified(
+        self,
+        name: Name,
+        peer_hash: bytes,
+        *,
+        timeout: float | None = None,
+        max_retries: int | None = None,
+        must_be_fresh: bool = False,
+        can_be_prefix: bool = False,
+        selector: InterestSelector | None = None,
+        require_signature: bool | None = None,
+        raise_on_failure: bool = True,
+    ) -> Data | None:
+        """Express an Interest with retry/backoff and run the verify pipeline.
+
+        Shared by ``fetch`` (exact, raising) and ``fetch_latest`` (discovery,
+        non-raising fallbacks). ``require_signature`` overrides the config
+        default for this call; ``raise_on_failure`` controls whether exhausted
+        retries raise the last error or return None.
+        """
         if self._link_pool is None or self._forwarder is None:
             raise RuntimeError("Client not started. Call start() or use as context manager.")
         timeout = timeout or self.config.fetch_timeout
@@ -140,6 +164,9 @@ class ICNClient:
                 interest = Interest(name=name)
                 interest.with_lifetime(int(timeout * 1000))
                 interest.nonce = os.urandom(8)
+                interest.must_be_fresh = must_be_fresh
+                interest.can_be_prefix = can_be_prefix
+                interest.selector = selector
 
                 result = await asyncio.wait_for(
                     self._forwarder.express(interest, face_id),
@@ -147,7 +174,9 @@ class ICNClient:
                 )
 
                 if result and result.verify_content_hash():
-                    sig_ok, sig_err = self._check_signature(result)
+                    sig_ok, sig_err = self._check_signature(
+                        result, require_signature=require_signature
+                    )
                     if not sig_ok:
                         last_error = sig_err
                         continue
@@ -178,18 +207,85 @@ class ICNClient:
         # All retries exhausted
         fetch_latency = time.time() - fetch_start
         metrics.record_fetch(fetch_latency, success=False)
-        if last_error:
+        if last_error and raise_on_failure:
             raise last_error
         return None
 
-    def _check_signature(self, data: Data) -> tuple[bool, Exception | None]:
+    async def fetch_latest(
+        self,
+        prefix: Name,
+        peer_hash: bytes,
+        timeout: float | None = None,
+        max_retries: int | None = None,
+    ) -> Data | None:
+        """Fetch the authenticated latest version under ``prefix``.
+
+        Discovery-first: fetch the producer-signed latest-version pointer
+        (rns_icn.discovery) with ``must_be_fresh`` so a stale cache revalidates
+        it to the origin, verify its signature, then fetch the exact
+        content-hash-pinned target it names — making "latest" a producer
+        assertion rather than a cache's ranking, and engaging rollback
+        protection on the pointer.
+
+        Falls back to the best-effort ``LATEST`` child selector (whatever the
+        answering node holds, unverifiable ranking) when no pointer is
+        available — e.g. a producer that never published one. Returns None if
+        nothing satisfies either path.
+        """
+        meta = await self._fetch_verified(
+            discovery.meta_name(prefix),
+            peer_hash,
+            timeout=timeout,
+            max_retries=max_retries,
+            must_be_fresh=True,
+            require_signature=True,
+            raise_on_failure=False,
+        )
+        if meta is not None:
+            try:
+                target = discovery.decode_meta(meta.content)
+            except discovery.DiscoveryError as e:
+                RNS.log(f"ICN: malformed latest pointer for {prefix}: {e}", RNS.LOG_WARNING)
+                target = None
+            if target is not None:
+                if target.rns_addr != prefix.rns_addr or not target.starts_with(prefix):
+                    RNS.log(
+                        f"ICN: latest pointer {target} escapes {prefix}; ignoring",
+                        RNS.LOG_WARNING,
+                    )
+                else:
+                    return await self.fetch(target, peer_hash, timeout, max_retries)
+
+        # Best-effort fallback: ask any node for its newest version. No
+        # must_be_fresh — when the origin is unreachable a cached latest is the
+        # graceful degradation; the ranking is unverifiable (see PROTOCOL.md §7).
+        return await self._fetch_verified(
+            prefix,
+            peer_hash,
+            timeout=timeout,
+            max_retries=max_retries,
+            can_be_prefix=True,
+            selector=InterestSelector(child=ChildSelector.LATEST),
+            raise_on_failure=False,
+        )
+
+    def _check_signature(
+        self, data: Data, require_signature: bool | None = None
+    ) -> tuple[bool, Exception | None]:
         """Verify a Data packet's producer signature per policy.
 
         Trust anchor is the producer's RNS identity, recalled from the name's
         producer address (``name.rns_addr``). A present-but-invalid signature
         is always rejected. A missing signature, or one whose producer key we
-        can't recall, is rejected only when ``require_signature`` is set.
+        can't recall, is rejected only when ``require`` is set. ``require``
+        defaults to ``config.require_signature`` but callers (e.g. a latest
+        pointer fetch) may force it on for a single call.
         """
+        require = (
+            self.config.require_signature
+            if require_signature is None
+            else require_signature
+        )
         if data.signature is not None:
             # The producer address in a name is the producer's *identity* hash
             # (not a destination hash), so recall accordingly.
@@ -201,13 +297,13 @@ class ICNClient:
                     return True, None
                 return False, ValueError("Data signature verification failed")
             # Signed, but we don't have the producer's key to verify.
-            if self.config.require_signature:
+            if require:
                 return False, ValueError(
                     "producer identity unknown; cannot verify signature"
                 )
             return True, None
         # Unsigned.
-        if self.config.require_signature:
+        if require:
             return False, ValueError("Data is unsigned but signature is required")
         return True, None
 

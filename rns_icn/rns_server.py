@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 
 import contextlib
 
-from . import access
+from . import access, discovery
 from .config import ServerConfig
 from .face import FaceId, LinkFace
 from .health import handle_health_interest, is_health_interest
@@ -422,13 +422,23 @@ class ICNServer(BaseICNServer):
                 RNS.log(f"ICN: Error on link {face_id}: {e}")
                 break
 
-    def publish_content(self, name: Name, content: bytes, sequence: int | None = None) -> None:
+    def publish_content(
+        self,
+        name: Name,
+        content: bytes,
+        sequence: int | None = None,
+        latest_under: Name | None = None,
+    ) -> None:
         """Publish content into the ContentStore.
 
         Content under a restricted prefix (config.access_rules) is encrypted with
         the prefix CEK before storage, so the stored/served ciphertext is what
         caches relay and what the producer signs — only consumers holding a
         capability can read it.
+
+        Also refreshes the collection's verifiable latest-version pointer
+        (rns_icn.discovery) so consumers can fetch the authenticated latest;
+        ``latest_under`` sets the collection prefix (default: the name's parent).
         """
         content_bytes, encrypted = self._access.encrypt_content(name, content)
         data = Data.new(name=name, content=content_bytes)
@@ -436,8 +446,39 @@ class ICNServer(BaseICNServer):
         if sequence is not None:
             data.with_sequence(sequence)
         self.forwarder.cs.insert(name, data)
+        self._publish_latest_pointer(name, data, sequence, latest_under)
         suffix = " (encrypted)" if encrypted else ""
         RNS.log(f"ICN: Published {name} ({len(content)} bytes){suffix}")
+
+    def _publish_latest_pointer(
+        self, name: Name, data: Data, sequence: int | None, latest_under: Name | None
+    ) -> None:
+        """Refresh the verifiable latest-version pointer for ``name``'s collection.
+
+        The pointer (rns_icn.discovery) names the just-published version,
+        content-hash pinned so a consumer's eventual fetch is self-certifying.
+        ``latest_under`` overrides the collection prefix; by default it is the
+        name's parent (all components but the leaf). A producer-root blob (no
+        parent) gets no pointer.
+        """
+        content_hash = data.metadata.content_hash
+        if content_hash is None:
+            return  # Data.new always hashes; defensive, keeps the pointer pinned
+        prefix = latest_under
+        if prefix is None:
+            if name.len() <= 1:
+                return
+            prefix = Name(self.rns_addr, list(name.components[1:-1]))
+        target = name.with_content_hash(content_hash)
+        meta_name = discovery.meta_name(prefix)
+        pointer = Data.new(name=meta_name, content=discovery.encode_meta(target))
+        if sequence is not None:
+            pointer.with_sequence(sequence)
+        pointer.with_freshness_period(self.config.meta_freshness_period)
+        # Stored unsigned like all origin Data; _maybe_sign signs it at serve time
+        # (meta_name.rns_addr == self.rns_addr), so the served pointer is
+        # producer-authenticated and rollback-checkable.
+        self.forwarder.cs.insert(meta_name, pointer)
 
     def issue_capability(
         self,

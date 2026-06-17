@@ -103,6 +103,12 @@ class ServerConfig:
     # served immediately while a background revalidation refreshes it. 0
     # disables stale-while-revalidate (caches forward on staleness instead).
     cs_stale_while_revalidate: int = 0
+    # Freshness period (seconds) stamped on the verifiable latest-version pointer
+    # (rns_icn.discovery) a producer publishes for each collection prefix. A
+    # consumer's must_be_fresh fetch_latest revalidates the pointer to the origin
+    # past a stale cache once this elapses; lower = snappier latest, more origin
+    # traffic. Tune against mesh load.
+    meta_freshness_period: int = 15
     resource_threshold: int = 100_000
     known_peers: list[KnownPeer] = field(default_factory=list)
     log_level: str = "INFO"
@@ -227,6 +233,7 @@ def _dict_to_server_config(data: dict[str, Any], base_path: str) -> ServerConfig
         cs_path=str((base_dir / data.get("cs_path", "~/.icn/content_store.db")).expanduser()),
         cs_prefix_ttls=data.get("cs_prefix_ttls", {}),
         cs_stale_while_revalidate=data.get("cs_stale_while_revalidate", 0),
+        meta_freshness_period=data.get("meta_freshness_period", 15),
         resource_threshold=data.get("resource_threshold", 100_000),
         known_peers=known_peers,
         log_level=data.get("log_level", "INFO"),

@@ -256,6 +256,10 @@ rejected. A selector carrying no constraint (`sel_flags == 0` and no fields)
   to revalidate past a cache toward the producer's true latest. `child` is
   ignored without `can_be_prefix` (an exact name has at most one match). A
   `min_sequence` floor, if also set, still applies.
+  * The `child` ranking is **unverifiable** — a cache MAY withhold a newer
+    version a consumer cannot detect. For an *authenticated* latest, consumers
+    **SHOULD** use the signed latest-version pointer (§14) and treat the
+    `child` selector only as a best-effort fallback.
 * **Hop limit**: remaining forwarding hops. Senders **SHOULD** always include it
   (the implementation always sets bit 3 on write). Each forwarding hop
   decrements it; an Interest received with `hop_limit == 0` **MUST NOT** be
@@ -695,8 +699,33 @@ These labels under a producer's namespace have defined meaning:
 |------|---------|---------|
 | `/<producer>/manifest` | Content manifest, JSON ([§15](#15-manifests)) | producer-signed Data |
 | `/<producer>/health` | Health/status JSON | unsigned Data |
+| `/<collection>/<0x00 'm'>` | Latest-version pointer (below) | producer-signed Data |
 
-Producers **SHOULD NOT** publish ordinary content under these labels.
+Any label whose **first byte is `0x00`** is protocol-reserved; application
+labels **MUST NOT** begin with `0x00`. Producers **SHOULD NOT** publish ordinary
+content under these labels.
+
+### 14.1 Latest-version pointer
+
+For each collection prefix, a producer MAY publish a small **latest-version
+pointer** as a producer-signed Data at the reserved name
+`<collection-prefix>/<0x00 'm'>` (the `0x00 m` label). Its payload is
+`[fmt:1=0x01][target-name]`, where `target-name` is the `Name.to_bytes()` of the
+current latest version under the collection, **content-hash pinned**. The pointer
+carries that version's `sequence` and a short `freshness_period`.
+
+A consumer resolves the authenticated latest by:
+
+1. fetching the pointer with `must_be_fresh` (a stale cache revalidates it to
+   the origin);
+2. verifying the producer signature and rejecting a rollback to an older
+   `(signed_at, sequence)` ([§10](#10-data-signing));
+3. checking the named target stays within the producer's namespace, then
+   fetching that exact content-hash-pinned name (self-certifying).
+
+This makes "latest" a producer assertion rather than a cache's unverifiable
+ranking. It is a pure naming/convention layer over signed Data — **no
+protocol-version change**.
 
 ---
 
