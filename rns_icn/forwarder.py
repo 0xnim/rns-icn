@@ -91,6 +91,20 @@ class Forwarder:
                 child=sel.child if sel else ChildSelector.NONE,
                 min_sequence=sel.min_sequence if sel else None,
             )
+            if (
+                cs_hit is not None
+                and sel is not None
+                and sel.child is ChildSelector.OLDEST
+                and sel.min_sequence is not None
+                and cs_hit.metadata.sequence != sel.min_sequence
+            ):
+                # Sequence-walk rule: a cache's "oldest ≥ floor" is only
+                # provably the *global* oldest when it sits exactly on the
+                # floor. Anything newer may shadow older entries held
+                # elsewhere (e.g. we cached the latest but not the history),
+                # so forward instead of answering. Only the producer may
+                # vouch for a gap — and it serves from its own CS, not here.
+                cs_hit = None
         else:
             cs_hit = self.cs.get(interest.name)
 
@@ -172,7 +186,11 @@ class Forwarder:
 
     async def _forward_one(self, interest: Interest, in_face: FaceId,
                            out_face_id: FaceId) -> Data | None:
-        name = interest.name
+        # PIT state is keyed hash-free: a content-hash-pinned Interest
+        # (self-certifying fetch) must still match the answering Data, whose
+        # name comes back unpinned — receive_data strips the Data side.
+        name = interest.name.without_content_hash() if interest.name.content_hash \
+            else interest.name
 
         self.pit.insert_or_aggregate(name, in_face, interest, interest.lifetime_ms)
         self.pit.set_out_face(name, out_face_id)
@@ -269,6 +287,8 @@ class Forwarder:
         backup face immediately, rather than waiting out the Interest lifetime.
         Carries no content, so it can never poison the cache.
         """
+        if name.content_hash:
+            name = name.without_content_hash()  # PIT state is keyed hash-free
         notifiers = self._pit_notifiers.pop(name, [])
         for fut in notifiers:
             if not fut.done():
@@ -295,6 +315,19 @@ class Forwarder:
         # interest name, which never carries a content hash)
         pit_name = data.name.without_content_hash() if data.name.content_hash else data.name
         matched = self.pit.satisfy(pit_name)
+        if matched is None:
+            # A prefix Interest's PIT entry is keyed by the *prefix*, while
+            # the Data answering it carries a full (longer) name — match the
+            # nearest pending ancestor that asked with can_be_prefix, or
+            # every selector fetch (latest/oldest/sequence walk) times out
+            # despite its answer having arrived.
+            for i in range(pit_name.len() - 1, 0, -1):
+                candidate = Name(pit_name.rns_addr, list(pit_name.components[1:i]))
+                entry = self.pit.find(candidate)
+                if entry is not None and entry.interest.can_be_prefix:
+                    pit_name = candidate
+                    matched = self.pit.satisfy(candidate)
+                    break
         if matched is not None:
             self._notify_waiters(pit_name, data)
         if matched is not None or cache_unsolicited:

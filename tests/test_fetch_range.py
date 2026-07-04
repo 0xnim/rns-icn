@@ -72,6 +72,39 @@ def test_min_sequence_walk_order():
     assert seen == [1, 3, 7]
 
 
+# ------------------------------------------------------------------- Forwarder
+
+
+@pytest.mark.asyncio
+async def test_walk_not_answered_by_cache_above_floor():
+    """A node holding only newer entries must not answer an OLDEST walk.
+
+    Holding the latest post but not the history is the normal state of a
+    consumer or cache; answering "oldest ≥ 1" with it would silently skip
+    the history held elsewhere. Only an exact-floor hit is authoritative.
+    """
+    from rns_icn.forwarder import Forwarder
+    from rns_icn.packet import Interest, InterestSelector
+
+    fwd = Forwarder()
+    post = _post(3)
+    fwd.cs.insert(post.name, post)
+
+    def walk_interest(floor: int) -> Interest:
+        return Interest(
+            name=PREFIX,
+            can_be_prefix=True,
+            selector=InterestSelector(child=ChildSelector.OLDEST, min_sequence=floor),
+        )
+
+    # No route upstream: a non-floor hit yields nothing rather than post 3…
+    assert await fwd.express(walk_interest(1), in_face=0) is None
+    # …while the exact-floor hit is provably the oldest ≥ floor and serves.
+    hit = await fwd.express(walk_interest(3), in_face=0)
+    assert hit is not None
+    assert hit.metadata.sequence == 3
+
+
 # ------------------------------------------------------------------ ICNClient
 
 

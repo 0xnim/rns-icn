@@ -158,11 +158,26 @@ class ICNServer:
         """Check local ContentStore for matching data."""
         if interest.can_be_prefix:
             sel = interest.selector
-            return self._maybe_sign(self.forwarder.cs.get_prefix(
+            hit = self._maybe_sign(self.forwarder.cs.get_prefix(
                 interest.name,
                 child=sel.child if sel else ChildSelector.NONE,
                 min_sequence=sel.min_sequence if sel else None,
             ))
+            if (
+                hit is not None
+                and sel is not None
+                and sel.child is ChildSelector.OLDEST
+                and sel.min_sequence is not None
+                and hit.metadata.sequence != sel.min_sequence
+                and interest.name.rns_addr != self.rns_addr
+            ):
+                # Sequence-walk rule: only an answer sitting exactly on the
+                # min_sequence floor is provably the global oldest ≥ floor.
+                # The producer is authoritative about gaps in its own
+                # namespace; a cache is not — decline so the Interest is
+                # forwarded toward the origin instead.
+                return None
+            return hit
         return self._maybe_sign(self.forwarder.cs.get(interest.name))
 
     async def _build_manifest_data(self, include_downstream: bool = True) -> Data:

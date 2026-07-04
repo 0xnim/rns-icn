@@ -166,6 +166,10 @@ class ContentStore:
 
     def insert(self, name: Name, data: Data) -> None:
         """Insert or update Data packet. Evicts LRU if over capacity."""
+        if name.content_hash is not None:
+            # Rows are keyed by the unpinned name; the pin is a property of a
+            # *request*, not of the stored edition.
+            name = name.without_content_hash()
         name_bytes = name.to_bytes()
         name_hash = self._name_hash(name)
         content_bytes = data.content
@@ -245,9 +249,18 @@ class ContentStore:
         return evicted
 
     def get(self, name: Name) -> Data | None:
-        """Get Data by exact name match."""
+        """Get Data by exact name match.
+
+        A content-hash-pinned name (self-certifying fetch) matches the stored
+        row for the unpinned name, and only when the pin equals the stored
+        content's hash — a store can never answer a pinned request with
+        different bytes than the requester asked for.
+        """
         self._purge_expired_internal()
 
+        pin = name.content_hash
+        if pin is not None:
+            name = name.without_content_hash()
         name_hash = self._name_hash(name)
         row = self._conn.execute(
             "SELECT name_bytes, content_bytes, metadata_json, inserted_at, "
@@ -262,6 +275,11 @@ class ContentStore:
         name_bytes, content_bytes, metadata_json, inserted_at, freshness_period = row
         stored_name = Name.from_bytes(name_bytes)
         if not self._verify_content(content_bytes, metadata_json):
+            self._misses += 1
+            return None
+        if pin is not None and hashlib.blake2b(
+            content_bytes, digest_size=32
+        ).digest() != pin:
             self._misses += 1
             return None
 

@@ -12,14 +12,14 @@ import RNS
 
 from . import access, discovery
 from .config import ClientConfig
-from .face import LinkFace
+from .face import FaceId, LinkFace
 from .forwarder import Forwarder
 from .icn_logging import setup_logging
 from .link_pool import LinkPool
 from .manifest import Manifest, ManifestEntry
 from .metrics import metrics
 from .name import Name
-from .packet import ChildSelector, Data, Interest, InterestSelector
+from .packet import ChildSelector, Data, Interest, InterestSelector, parse_packet
 
 
 class ICNClient:
@@ -42,6 +42,8 @@ class ICNClient:
         # producer addr → capabilities (rns_icn.access) granting this client read
         # access to restricted prefixes, loaded from config.capabilities.
         self._capability_store: dict[bytes, list[access.Capability]] = {}
+        # face id → reader task pumping that face's packets into the forwarder.
+        self._pump_tasks: dict[int, asyncio.Task] = {}
 
     async def __aenter__(self) -> ICNClient:
         return await self.start()
@@ -102,6 +104,9 @@ class ICNClient:
 
     async def shutdown(self) -> None:
         """Gracefully stop link pool and RNS."""
+        for task in self._pump_tasks.values():
+            task.cancel()
+        self._pump_tasks.clear()
         if self._link_pool:
             await self._link_pool.stop()
         if self._started_rns and RNS.Reticulum.get_instance() is not None:
@@ -160,6 +165,12 @@ class ICNClient:
 
                 face_id = self._get_or_create_face_id(link)
 
+                # The forwarder routes Interests by FIB; a consumer's "route"
+                # is simply "this producer's namespace is reachable via the
+                # peer we were told to ask". Idempotent (Fib.insert dedupes),
+                # and withdrawn again when the link's face closes.
+                self._forwarder.add_route(Name(name.rns_addr), face_id, cost=1)
+
                 # Express interest with lifetime in milliseconds
                 # Add unique nonce for duplicate detection
                 interest = Interest(name=name)
@@ -175,6 +186,16 @@ class ICNClient:
                 )
 
                 if result and result.verify_content_hash():
+                    # Self-certification: a content-hash-pinned request only
+                    # accepts the exact bytes it named, whoever served them.
+                    if (
+                        name.content_hash is not None
+                        and result.metadata.content_hash != name.content_hash
+                    ):
+                        last_error = ValueError(
+                            "Data does not match the requested content-hash pin"
+                        )
+                        continue
                     sig_ok, sig_err = self._check_signature(
                         result, require_signature=require_signature
                     )
@@ -464,9 +485,41 @@ class ICNClient:
         face_id = self._face_counter
         self._face_counter += 1
 
-        link_face = LinkFace(face_id, link, loop=asyncio.get_event_loop())
+        loop = asyncio.get_event_loop()
+
+        def _withdraw(fid: FaceId, _loop=loop) -> None:
+            # Fired from the RNS thread on link close; hop onto the loop so a
+            # dead next-hop's routes are withdrawn instead of black-holing.
+            _loop.call_soon_threadsafe(self._forwarder.withdraw_face, fid)
+
+        link_face = LinkFace(face_id, link, loop=loop, on_closed=_withdraw)
         self._forwarder.register_face(link_face)
+        self._pump_tasks[face_id] = asyncio.create_task(
+            self._pump_face(face_id, link_face)
+        )
         return face_id
+
+    async def _pump_face(self, face_id: FaceId, link_face: LinkFace) -> None:
+        """Deliver packets arriving on a link face into the forwarder.
+
+        The forwarder transmits Interests with ``send_raw`` and waits on PIT
+        notifiers; something must feed arriving Data (and NACKs) back into it
+        — on the server ``_process_link`` does this, and a consumer needs the
+        same pump or every reply sits unread in the face queue until timeout.
+        """
+        queue = link_face._recv_queue
+        while not link_face._closed:
+            raw = await queue.get()
+            if not raw:
+                break  # close sentinel
+            try:
+                pkt = parse_packet(raw)
+            except Exception:
+                continue  # not ours to police; consumer just ignores garbage
+            if pkt.data is not None:
+                await self._forwarder.receive_data(pkt.data, face_id)
+            elif pkt.nack is not None:
+                self._forwarder.receive_nack(pkt.nack.name, face_id)
 
     @property
     def identity(self) -> RNS.Identity:
