@@ -156,6 +156,21 @@ class ICNServer:
 
     def _serve_from_cs(self, interest: Interest, in_face_id: FaceId) -> Data | None:
         """Check local ContentStore for matching data."""
+        hit = self._cs_lookup(interest)
+        if (
+            hit is not None
+            and interest.must_be_fresh
+            and not hit.metadata.freshness.fresh
+            and interest.name.rns_addr != self.rns_addr
+        ):
+            # must_be_fresh means "revalidate past stale caches": a cache
+            # declines so the Interest forwards toward the origin. The
+            # producer's own row is by definition the current version, so it
+            # serves regardless of the row's declared freshness period.
+            return None
+        return hit
+
+    def _cs_lookup(self, interest: Interest) -> Data | None:
         if interest.can_be_prefix:
             sel = interest.selector
             hit = self._maybe_sign(self.forwarder.cs.get_prefix(
