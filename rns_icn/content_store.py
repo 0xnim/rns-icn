@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from .discovery import is_reserved as _is_reserved_name
 from .name import Name
 from .packet import ChildSelector, Data, DataMetadata, Freshness
 
@@ -320,8 +321,15 @@ class ContentStore:
         # Return first valid match in the chosen order (newest-inserted, or the
         # sequence extreme when a child selector is set).
         for name_bytes, content_bytes, metadata_json, inserted_at, freshness_period in rows:
+            stored_name = Name.from_bytes(name_bytes)
+            # Reserved discovery objects (latest-pointer, catalog) live under
+            # the collection prefix but are infrastructure, not members — a
+            # child selector ranking collection editions must never pick one
+            # (the pointer carries the newest edition's sequence, so it would
+            # shadow that edition in LATEST answers and sequence walks).
+            if child is not ChildSelector.NONE and _is_reserved_name(stored_name):
+                continue
             if self._verify_content(content_bytes, metadata_json):
-                stored_name = Name.from_bytes(name_bytes)
                 metadata = self._parse_metadata(metadata_json, inserted_at, freshness_period)
                 signature = self._parse_signature(metadata_json)
                 self._hits += 1

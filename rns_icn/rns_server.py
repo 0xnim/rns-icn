@@ -480,6 +480,37 @@ class ICNServer(BaseICNServer):
         suffix = " (encrypted)" if encrypted else ""
         RNS.log(f"ICN: Published {name} ({len(content)} bytes){suffix}")
 
+    async def publish_post(
+        self,
+        name: Name,
+        content: bytes,
+        sequence: int,
+        latest_under: Name | None = None,
+    ) -> None:
+        """Publish one immutable edition as pullable-latest *and* live push.
+
+        Composes ``publish_content`` (CS insert + verifiable latest-pointer)
+        and ``publish_pushed`` (APS push to subscribers + peer propagation)
+        as a single operation with one CS insert. ``sequence`` is mandatory:
+        an edition stream without monotonic sequences has neither rollback
+        protection nor a meaningful latest-pointer.
+
+        The Data is signed eagerly (like ``publish_pushed``) so the pushed
+        copy is verifiable; serve-time ``_maybe_sign`` skips already-signed
+        Data, so pull answers carry the same signature.
+        """
+        content_bytes, encrypted = self._access.encrypt_content(name, content)
+        data = Data.new(name=name, content=content_bytes)
+        data.metadata.encrypted = encrypted
+        data.with_sequence(sequence)
+        self._maybe_sign(data)
+        self.forwarder.cs.insert(name, data)
+        self._publish_latest_pointer(name, data, sequence, latest_under)
+        await self.aps.publish(data, offline_queue=self.offline_queue)
+        await self.propagation.propagate(data)
+        suffix = " (encrypted)" if encrypted else ""
+        RNS.log(f"ICN: Published post {name} seq={sequence} ({len(content)} bytes){suffix}")
+
     def _publish_latest_pointer(
         self, name: Name, data: Data, sequence: int | None, latest_under: Name | None
     ) -> None:

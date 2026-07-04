@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import time
+from collections.abc import AsyncIterator
 from pathlib import Path
 
 import RNS
@@ -268,6 +269,49 @@ class ICNClient:
             selector=InterestSelector(child=ChildSelector.LATEST),
             raise_on_failure=False,
         )
+
+    async def fetch_range(
+        self,
+        prefix: Name,
+        peer_hash: bytes,
+        start_sequence: int = 0,
+        max_items: int | None = None,
+        timeout: float | None = None,
+        max_retries: int | None = None,
+    ) -> AsyncIterator[Data]:
+        """Walk a collection's editions in sequence order, fully verified.
+
+        The authenticated counterpart to ``Forwarder.stream_fetch``: expresses
+        successive prefix Interests selecting the OLDEST entry at or above a
+        monotonic ``min_sequence`` floor, each answer passing the full verify
+        pipeline (content hash, producer signature, rollback, decryption).
+        Gap-tolerant — each step asks for "the next edition >= N", never an
+        exact sequence — and stops when nothing newer is available (which may
+        mean caught-up, or partitioned from anyone holding more) or after
+        ``max_items`` editions.
+        """
+        min_seq = start_sequence
+        yielded = 0
+        while max_items is None or yielded < max_items:
+            data = await self._fetch_verified(
+                prefix,
+                peer_hash,
+                timeout=timeout,
+                max_retries=max_retries,
+                can_be_prefix=True,
+                selector=InterestSelector(child=ChildSelector.OLDEST, min_sequence=min_seq),
+                raise_on_failure=False,
+            )
+            if data is None:
+                return
+            seq = data.metadata.sequence
+            if seq is None or seq < min_seq:
+                # Un-sequenced or below-floor answer: a node that ignores the
+                # selector. Advancing the floor from it would be guesswork.
+                return
+            min_seq = seq + 1
+            yielded += 1
+            yield data
 
     def _check_signature(
         self, data: Data, require_signature: bool | None = None
