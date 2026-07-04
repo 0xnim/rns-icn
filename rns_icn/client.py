@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 
 import RNS
@@ -19,7 +19,14 @@ from .link_pool import LinkPool
 from .manifest import Manifest, ManifestEntry
 from .metrics import metrics
 from .name import Name
-from .packet import ChildSelector, Data, Interest, InterestSelector, parse_packet
+from .packet import (
+    APSubscribe,
+    ChildSelector,
+    Data,
+    Interest,
+    InterestSelector,
+    parse_packet,
+)
 
 
 class ICNClient:
@@ -44,6 +51,8 @@ class ICNClient:
         self._capability_store: dict[bytes, list[access.Capability]] = {}
         # face id → reader task pumping that face's packets into the forwarder.
         self._pump_tasks: dict[int, asyncio.Task] = {}
+        # (prefix, callback) pairs served by the shared push dispatcher.
+        self._subscriptions: list[tuple[Name, Callable[[Data], None]]] = []
 
     async def __aenter__(self) -> ICNClient:
         return await self.start()
@@ -333,6 +342,53 @@ class ICNClient:
             min_seq = seq + 1
             yielded += 1
             yield data
+
+    async def subscribe(
+        self,
+        prefix: Name,
+        peer_hash: bytes,
+        callback: Callable[[Data], None],
+        start_from_now: bool = True,
+    ) -> None:
+        """Upgrade to push mode: APS-subscribe to ``prefix`` on ``peer_hash``.
+
+        Each pushed Data under ``prefix`` runs the same verify pipeline as a
+        fetch (content hash, producer signature, rollback, decryption) before
+        reaching ``callback`` on the event loop. With ``start_from_now``
+        False the producer first replays its existing content for the stream;
+        either way it drains anything offline-queued for it, so a resubscribe
+        after a disconnect delivers what was missed.
+        """
+        link = await self._link_pool.get_link(peer_hash)
+        if not link:
+            raise RuntimeError(f"Failed to establish link to {peer_hash.hex()}")
+        face_id = self._get_or_create_face_id(link)
+        self._subscriptions.append((prefix, callback))
+        self._forwarder.set_data_callback(self._dispatch_push)
+        face = self._forwarder.faces[face_id]
+        await face.send_raw(
+            APSubscribe(name=prefix, start_from_now=start_from_now).to_bytes()
+        )
+
+    def _dispatch_push(self, data: Data) -> None:
+        """Verify a pushed Data and fan it out to matching subscriptions.
+
+        Pushed Data satisfies no PIT entry, so the forwarder won't cache it;
+        it reaches consumers only through this observer — after the same
+        checks a pulled Data gets.
+        """
+        for prefix, callback in self._subscriptions:
+            if not data.name.starts_with(prefix):
+                continue
+            if not data.verify_content_hash():
+                return
+            sig_ok, _ = self._check_signature(data)
+            if not sig_ok:
+                return
+            rb_ok, _ = self._check_rollback(data)
+            if not rb_ok:
+                return
+            callback(self._maybe_decrypt(data))
 
     def _check_signature(
         self, data: Data, require_signature: bool | None = None
