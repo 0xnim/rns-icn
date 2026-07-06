@@ -5,8 +5,9 @@ ICN-over-RNS wire format. It exists so that **any** implementation — a rewrite
 a port to another language, or this one after a refactor — can prove it produces
 and parses the protocol byte-for-byte identically to the reference.
 
-If your implementation reproduces every byte-exact vector here and rejects the
-negative vector, it is wire-conformant with rns-icn at this protocol version.
+If your implementation reproduces every byte-exact vector here and rejects
+every `negative` vector, it is wire-conformant with rns-icn at this protocol
+version.
 See `PROTOCOL.md` Appendix A for how the vectors map onto the spec sections.
 
 ## Fixed identity
@@ -43,7 +44,8 @@ your `signed_hash` construction and signature verification are correct.
   "signed_hash_hex": "...",     // present for producer-signed objects
   "signature_hex": "...",       // present for producer-signed objects
   "wire_hex": "...",            // expected serialization (for wire kinds)
-  "cek_hex": "..."              // expected key (derive_cek only)
+  "cek_hex": "...",             // expected key (derive_cek only)
+  "reject": "..."               // rejection class (negative vectors only)
 }
 ```
 
@@ -59,9 +61,15 @@ A nested name is `{"components": [hex, ...], "content_hash": hex | null}` where
 - `data` — `Data` (unsigned, content-hash only, signed, signed+encrypted).
 - `invalidate` — `Invalidate` (unsigned, prefix, signed).
 - `apsubscribe` / `proppeer` / `cappeer` — control packets.
+- `nack` — `Nack`, one vector per reason code (the codes are normative).
 - `capability` — `Capability` with a **fixed placeholder** `wrapped_cek` so the
   envelope is byte-exact (a real wrapped CEK is non-deterministic — see below).
 - `derive_cek` — deterministic content-encryption-key derivation; check `cek_hex`.
+- `negative` — byte streams that must **not** be accepted. `reject` names the
+  check: `unsupported-version` and `unknown-packet-type` must raise a parse
+  error; `bad-signature` parses cleanly but must fail producer-signature
+  verification against `public_key_hex`. These have no `fields` — only the
+  committed `wire_hex`.
 
 ## What is *not* byte-exact
 

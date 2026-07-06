@@ -36,6 +36,8 @@ from rns_icn.packet import (
     Interest,
     InterestSelector,
     Invalidate,
+    Nack,
+    NackReason,
     PropPeer,
 )
 
@@ -141,6 +143,12 @@ def build(kind: str, fields: dict[str, Any]) -> Any:
             version=fields["version"],
             role=fields["role"],
             features=fields["features"],
+        )
+
+    if kind == "nack":
+        return Nack(
+            name=build_name(fields["name"]),
+            reason=NackReason(fields["reason"]),
         )
 
     if kind == "capability":

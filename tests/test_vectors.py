@@ -36,6 +36,7 @@ from rns_icn.packet import (
     DataMetadata,
     Interest,
     Invalidate,
+    Nack,
     PropPeer,
     UnsupportedVersionError,
     _read_varint,
@@ -50,6 +51,8 @@ with FIXTURE.open() as f:
     _FIX = json.load(f)
 
 VECTORS: list[dict[str, Any]] = _FIX["vectors"]
+POSITIVE = [v for v in VECTORS if v["kind"] != "negative"]
+NEGATIVE = [v for v in VECTORS if v["kind"] == "negative"]
 
 # from_bytes dispatch for the wire-serializable kinds.
 _PARSERS = {
@@ -62,6 +65,7 @@ _PARSERS = {
     "proppeer": PropPeer.from_bytes,
     "cappeer": CapPeer.from_bytes,
     "capability": Capability.from_bytes,
+    "nack": Nack.from_bytes,
 }
 
 
@@ -75,7 +79,7 @@ def test_fixture_metadata_matches_identity():
     assert _FIX["public_key_hex"] == IDENT.get_public_key().hex()
 
 
-@pytest.mark.parametrize("vec", VECTORS, ids=_ids)
+@pytest.mark.parametrize("vec", POSITIVE, ids=_ids)
 def test_vector_conformance(vec: dict[str, Any]):
     kind = vec["kind"]
     fields = vec["fields"]
@@ -114,9 +118,10 @@ def test_vector_conformance(vec: dict[str, Any]):
 
 def test_parse_packet_dispatches_framed_vectors():
     """Every framed (type-byte-prefixed) vector dispatches via parse_packet."""
-    framed = {"interest", "data", "apsubscribe", "proppeer", "cappeer", "invalidate"}
+    framed = {"interest", "data", "apsubscribe", "proppeer", "cappeer",
+              "invalidate", "nack"}
     seen = set()
-    for vec in VECTORS:
+    for vec in POSITIVE:
         if vec["kind"] not in framed:
             continue
         pkt = parse_packet(bytes.fromhex(vec["wire_hex"]))
@@ -125,22 +130,37 @@ def test_parse_packet_dispatches_framed_vectors():
     assert seen == framed, f"missing framed kinds: {framed - seen}"
 
 
-# ── Negative / robustness vectors ──
+# ── Negative vectors (committed byte streams that must be rejected) ──
 
 
-def test_unsupported_version_is_rejected():
-    """A packet declaring an unknown protocol version must be rejected cleanly."""
-    data_vec = next(v for v in VECTORS if v["name"] == "data/unsigned-no-metadata")
-    wire = bytearray(bytes.fromhex(data_vec["wire_hex"]))
-    wire[1] = 0x02  # bump the version byte past SUPPORTED_VERSIONS
-    with pytest.raises(UnsupportedVersionError):
-        Data.from_bytes(bytes(wire))
-    with pytest.raises(UnsupportedVersionError):
-        parse_packet(bytes(wire))
+def test_fixture_has_all_negative_checks():
+    """The fixture commits one negative vector per rejection class."""
+    assert {v["reject"] for v in NEGATIVE} == {
+        "unsupported-version", "unknown-packet-type", "bad-signature",
+    }
+
+
+@pytest.mark.parametrize("vec", NEGATIVE, ids=_ids)
+def test_negative_vector_rejected(vec: dict[str, Any]):
+    wire = bytes.fromhex(vec["wire_hex"])
+    reject = vec["reject"]
+    if reject == "unsupported-version":
+        with pytest.raises(UnsupportedVersionError):
+            Data.from_bytes(wire)
+        with pytest.raises(UnsupportedVersionError):
+            parse_packet(wire)
+    elif reject == "unknown-packet-type":
+        with pytest.raises(ValueError):
+            parse_packet(wire)
+    elif reject == "bad-signature":
+        parsed = Data.from_bytes(wire)  # parses cleanly...
+        assert not parsed.verify_signature(IDENT.validate)  # ...but must not verify
+    else:  # pragma: no cover - fixture and test must agree on classes
+        pytest.fail(f"unknown reject class: {reject}")
 
 
 def test_tampered_signed_data_fails_verification():
-    """Flipping one content byte must break the producer signature."""
+    """Re-signing binding: a valid signature must not cover altered content."""
     vec = next(v for v in VECTORS if v["name"] == "data/signed-full")
     parsed = Data.from_bytes(bytes.fromhex(vec["wire_hex"]))
     assert parsed.verify_signature(IDENT.validate)  # baseline

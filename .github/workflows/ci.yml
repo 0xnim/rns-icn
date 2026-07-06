@@ -32,6 +32,9 @@ jobs:
       - name: Test (pytest)
         run: pytest -q --cov=rns_icn --cov-report=term-missing
 
+      - name: Wire-format vectors up to date
+        run: python scripts/gen_test_vectors.py --check
+
       - name: Type check (mypy)
         run: mypy rns_icn
 

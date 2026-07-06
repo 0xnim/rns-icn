@@ -1002,13 +1002,15 @@ verify the committed signature against `public_key_hex` without RNS.
 
 Each vector covers one of: varint encoding ([§4.1](#41-varint) — boundary
 values), `Name` ([§5](#5-names)), `Interest`/`Data` and the control packets
-([§7](#7-interest)–[§9](#9-control-packets)) including `Invalidate`,
-`DataMetadata` flag combinations, `Capability` and `derive_cek`
-([§11](#11-access-control)), plus a negative vector asserting an unknown
-per-packet version byte is rejected
-([§17](#17-versioning-and-forward-compatibility)). Non-deterministic crypto
-(ECIES CEK wrapping, AES content encryption) is exercised by round-trip rather
-than fixed bytes.
+([§7](#7-interest)–[§9](#9-control-packets)) including `Invalidate` and `NACK`
+(one vector per reason code — the codes are normative), `DataMetadata` flag
+combinations, `Capability` and `derive_cek` ([§11](#11-access-control)), plus
+negative vectors — committed byte streams a conformant implementation must
+reject: an unknown per-packet version byte, an unassigned packet type
+([§17](#17-versioning-and-forward-compatibility)), and a signed `Data` packet
+whose signature must fail verification ([§10.2](#102-data-signature-envelope)).
+Non-deterministic crypto (ECIES CEK wrapping, AES content encryption) is
+exercised by round-trip rather than fixed bytes.
 
 The reference implementation re-verifies itself against the committed fixture in
 `tests/test_vectors.py`; regenerate intentionally with

@@ -123,6 +123,14 @@ SPECS: list[dict[str, Any]] = [
     {"name": "cappeer/origin", "kind": "cappeer",
      "fields": {"version": 1, "role": 0, "features": 0x1F}},
 
+    # ── Nack (one vector per reason: the reason codes are normative) ──
+    {"name": "nack/no-route", "kind": "nack",
+     "fields": {"name": name_fields(b"doc"), "reason": 0x01}},
+    {"name": "nack/congestion", "kind": "nack",
+     "fields": {"name": name_fields(b"doc"), "reason": 0x02}},
+    {"name": "nack/no-data", "kind": "nack",
+     "fields": {"name": name_fields(b"doc"), "reason": 0x03}},
+
     # ── Capability (fixed placeholder wrapped_cek -> byte-exact) ──
     {"name": "capability/signed", "kind": "capability", "sign": True,
      "fields": {"producer": PHEX, "consumer": ("aa" * 16),
@@ -170,14 +178,44 @@ def make_vector(spec: dict[str, Any]) -> dict[str, Any]:
     return vec
 
 
+def make_negative_vectors(positive: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Byte streams a conformant implementation must reject (or fail to verify).
+
+    Derived deterministically from the positive vectors so they stay in lockstep
+    with the wire format; ``reject`` names the check that must fire.
+    """
+    by_name = {v["name"]: v for v in positive}
+
+    def _negative(name: str, reject: str, wire: bytes) -> dict[str, Any]:
+        return {"name": name, "kind": "negative", "exact": True,
+                "reject": reject, "wire_hex": wire.hex()}
+
+    # A valid Data packet declaring a protocol version we don't speak.
+    versioned = bytearray(bytes.fromhex(by_name["data/unsigned-no-metadata"]["wire_hex"]))
+    versioned[1] = 0x7F
+    # A type byte outside the assigned packet-type range.
+    unknown_type = bytes([0x7F]) + bytes.fromhex(by_name["data/unsigned-no-metadata"]["wire_hex"])[1:]
+    # A signed Data packet whose signature has one flipped byte: it must parse
+    # cleanly but fail producer-signature verification.
+    bad_sig = bytearray(bytes.fromhex(by_name["data/signed-full"]["wire_hex"]))
+    bad_sig[-1] ^= 0x01  # signature is the trailing field
+
+    return [
+        _negative("negative/unsupported-version", "unsupported-version", bytes(versioned)),
+        _negative("negative/unknown-packet-type", "unknown-packet-type", unknown_type),
+        _negative("negative/bad-signature", "bad-signature", bytes(bad_sig)),
+    ]
+
+
 def build_fixture() -> dict[str, Any]:
+    positive = [make_vector(s) for s in SPECS]
     return {
         "_comment": "Canonical wire-format KAT vectors for rns-icn. "
                     "Regenerate with: python scripts/gen_test_vectors.py",
         "seed_hex": SEED.hex(),
         "producer_hash_hex": PHEX,
         "public_key_hex": IDENT.get_public_key().hex(),
-        "vectors": [make_vector(s) for s in SPECS],
+        "vectors": positive + make_negative_vectors(positive),
     }
 
 

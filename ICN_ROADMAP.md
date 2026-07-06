@@ -283,7 +283,20 @@ control: the boundary is encryption, not "don't serve it."
     dynamic-FIB re-install had never actually fired over real RNS. Fixed
     (`peer_discovery.py`), with a fast regression test asserting the filter
     hashes to the real destination hash (`test_peer_discovery.py`).
-- [ ] Interop test vectors
+- [x] **Interop test vectors**: `tests/vectors/wire_vectors.json` is the
+  committed, language-neutral KAT fixture (fixed producer identity → exact
+  bytes, signed hashes, deterministic Ed25519 signatures) covering every
+  wire-serializable type — varint boundaries, `Name`, `Interest` (selectors,
+  prefix/fresh flags), `DataMetadata`, `Data` (unsigned → signed+encrypted),
+  `Invalidate`, `APSubscribe`/`PropPeer`/`CapPeer`, `Nack` (one vector per
+  reason code), `Capability`, `derive_cek` — plus committed **negative
+  vectors** (unsupported version, unknown packet type, bad signature) that a
+  conformant implementation must reject. Non-deterministic crypto (ECIES wrap,
+  AES content encryption) is covered by round-trip tests instead.
+  `scripts/gen_test_vectors.py --check` fails on undocumented wire drift;
+  `tests/test_vectors.py` re-verifies the reference implementation against the
+  fixture. A non-Python SDK proves wire conformance by reproducing/rejecting
+  this fixture alone — see `tests/vectors/README.md` and PROTOCOL.md Appendix A.
 - [x] **Load testing** (10K+ concurrent fetches): in-process load tests drive the
   forwarding core (`Forwarder`/`Pit`/`CS`/strategy) against a mock upstream face,
   so thousands of concurrent Interests run in well under a second — fast enough to

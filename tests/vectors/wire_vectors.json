@@ -369,6 +369,54 @@
       "wire_hex": "0501000000001f"
     },
     {
+      "name": "nack/no-route",
+      "kind": "nack",
+      "exact": true,
+      "fields": {
+        "name": {
+          "components": [
+            "ad0324ff38c1c06511d1246eb4c7d791",
+            "646f63"
+          ],
+          "content_hash": null
+        },
+        "reason": 1
+      },
+      "wire_hex": "0701160210ad0324ff38c1c06511d1246eb4c7d79103646f6301"
+    },
+    {
+      "name": "nack/congestion",
+      "kind": "nack",
+      "exact": true,
+      "fields": {
+        "name": {
+          "components": [
+            "ad0324ff38c1c06511d1246eb4c7d791",
+            "646f63"
+          ],
+          "content_hash": null
+        },
+        "reason": 2
+      },
+      "wire_hex": "0701160210ad0324ff38c1c06511d1246eb4c7d79103646f6302"
+    },
+    {
+      "name": "nack/no-data",
+      "kind": "nack",
+      "exact": true,
+      "fields": {
+        "name": {
+          "components": [
+            "ad0324ff38c1c06511d1246eb4c7d791",
+            "646f63"
+          ],
+          "content_hash": null
+        },
+        "reason": 3
+      },
+      "wire_hex": "0701160210ad0324ff38c1c06511d1246eb4c7d79103646f6303"
+    },
+    {
       "name": "capability/signed",
       "kind": "capability",
       "exact": true,
@@ -404,6 +452,27 @@
         }
       },
       "cek_hex": "b01f9be12440f5acee6c357f4c15ea3d92ee9ed922225ee4259f90c2fa021ea3"
+    },
+    {
+      "name": "negative/unsupported-version",
+      "kind": "negative",
+      "exact": true,
+      "reject": "unsupported-version",
+      "wire_hex": "027f160210ad0324ff38c1c06511d1246eb4c7d79103646f630000000b68656c6c6f20776f726c6400"
+    },
+    {
+      "name": "negative/unknown-packet-type",
+      "kind": "negative",
+      "exact": true,
+      "reject": "unknown-packet-type",
+      "wire_hex": "7f01160210ad0324ff38c1c06511d1246eb4c7d79103646f630000000b68656c6c6f20776f726c6400"
+    },
+    {
+      "name": "negative/bad-signature",
+      "kind": "negative",
+      "exact": true,
+      "reject": "bad-signature",
+      "wire_hex": "0201160210ad0324ff38c1c06511d1246eb4c7d79103646f630000000b68656c6c6f20776f726c64033113256c83b297114d201b30179f3f0ef0cace9783622da5974326b436178aeef6100000000000000003000000006553f100013ed6bf0e2314e9c544513e5ac78220e59fa62b8a430036551457caad44e3f72a639d245f14d36b57e4898ee145d4482c963feb523fe953ca8dd7612ea9c606"
     }
   ]
 }

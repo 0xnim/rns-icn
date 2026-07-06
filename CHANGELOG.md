@@ -43,8 +43,10 @@ is still being shaped in place.
   chunked transfer for large content.
 - **Canonical wire-format test vectors.** `tests/vectors/wire_vectors.json` is a
   committed KAT fixture (fixed identity → exact bytes, signed hashes, and
-  signatures) covering every wire-serializable type plus `derive_cek` and a
-  reject-unknown-version case; `tests/test_vectors.py` holds the reference to it
+  signatures) covering every wire-serializable type — including `Nack`, one
+  vector per reason code — plus `derive_cek`, and committed negative vectors
+  (unsupported version, unknown packet type, bad signature) that a conformant
+  implementation must reject; `tests/test_vectors.py` holds the reference to it
   and re-implementers can self-verify against it. Generated/checked via
   `scripts/gen_test_vectors.py`. See `PROTOCOL.md` Appendix A.
 - **Fix `DataMetadata` parse misalignment.** The staleness field (`age_seconds`)
