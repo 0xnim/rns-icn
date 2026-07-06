@@ -170,7 +170,7 @@ class ICNClient:
         base_delay = self.config.base_retry_delay
         max_delay = self.config.max_retry_delay
 
-        last_error = None
+        last_error: Exception | None = None
         fetch_start = time.time()
         for attempt in range(max_retries + 1):
             try:
@@ -407,6 +407,8 @@ class ICNClient:
         either way it drains anything offline-queued for it, so a resubscribe
         after a disconnect delivers what was missed.
         """
+        if self._link_pool is None or self._forwarder is None:
+            raise RuntimeError("Client not started. Call start() or use as context manager.")
         link = await self._link_pool.get_link(peer_hash)
         if not link:
             raise RuntimeError(f"Failed to establish link to {peer_hash.hex()}")
@@ -577,11 +579,12 @@ class ICNClient:
 
     def _get_or_create_face_id(self, link: RNS.Link) -> int:
         """Get existing face ID for link or create new one."""
-        if not self._forwarder:
+        forwarder = self._forwarder
+        if not forwarder:
             raise RuntimeError("Forwarder not initialized. Call start() first.")
 
         # Check if link already has a registered face
-        for face in self._forwarder.faces.values():
+        for face in forwarder.faces.values():
             if hasattr(face, "_link") and face._link is link:
                 return face.id()
 
@@ -594,10 +597,10 @@ class ICNClient:
         def _withdraw(fid: FaceId, _loop=loop) -> None:
             # Fired from the RNS thread on link close; hop onto the loop so a
             # dead next-hop's routes are withdrawn instead of black-holing.
-            _loop.call_soon_threadsafe(self._forwarder.withdraw_face, fid)
+            _loop.call_soon_threadsafe(forwarder.withdraw_face, fid)
 
         link_face = LinkFace(face_id, link, loop=loop, on_closed=_withdraw)
-        self._forwarder.register_face(link_face)
+        forwarder.register_face(link_face)
         self._pump_tasks[face_id] = asyncio.create_task(
             self._pump_face(face_id, link_face)
         )
@@ -611,6 +614,9 @@ class ICNClient:
         — on the server ``_process_link`` does this, and a consumer needs the
         same pump or every reply sits unread in the face queue until timeout.
         """
+        forwarder = self._forwarder
+        if forwarder is None:
+            raise RuntimeError("Forwarder not initialized. Call start() first.")
         queue = link_face._recv_queue
         while not link_face._closed:
             raw = await queue.get()
@@ -621,9 +627,9 @@ class ICNClient:
             except Exception:
                 continue  # not ours to police; consumer just ignores garbage
             if pkt.data is not None:
-                await self._forwarder.receive_data(pkt.data, face_id)
+                await forwarder.receive_data(pkt.data, face_id)
             elif pkt.nack is not None:
-                self._forwarder.receive_nack(pkt.nack.name, face_id)
+                forwarder.receive_nack(pkt.nack.name, face_id)
 
     @property
     def identity(self) -> RNS.Identity:
