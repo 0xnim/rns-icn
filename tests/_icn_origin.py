@@ -6,7 +6,12 @@ single ``ORIGIN_READY <json>`` line on stdout once content is published so the
 parent test can hand-shake (destination hash + identity path).
 
 Not a test module — the leading underscore keeps pytest from collecting it.
-Invoked as: ``python tests/_icn_origin.py <configdir> <listen_port>``
+Invoked as: ``python tests/_icn_origin.py <configdir> <port> [--connect]``
+
+By default the origin listens on ``port``. With ``--connect`` it instead
+dials 127.0.0.1:``port`` as a TCP client — used when the peer is the test
+process itself, whose shared Reticulum instance (see ``conftest.py``) owns
+the listening side.
 """
 
 import asyncio
@@ -25,8 +30,20 @@ ASPECT = "default"
 CONTENT = b"Hello from ICN server A!"
 
 
-def _write_config(configdir: str, listen_port: int) -> None:
+def _write_config(configdir: str, port: int, connect: bool) -> None:
     os.makedirs(configdir, exist_ok=True)
+    if connect:
+        interface = f"""  [[TCP Client Interface]]
+    type = TCPClientInterface
+    interface_enabled = yes
+    target_host = 127.0.0.1
+    target_port = {port}"""
+    else:
+        interface = f"""  [[TCP Server Interface]]
+    type = TCPServerInterface
+    interface_enabled = yes
+    listen_ip = 127.0.0.1
+    listen_port = {port}"""
     config = f"""[reticulum]
   enable_transport = Yes
   share_instance = No
@@ -36,11 +53,7 @@ def _write_config(configdir: str, listen_port: int) -> None:
   loglevel = 3
 
 [interfaces]
-  [[TCP Server Interface]]
-    type = TCPServerInterface
-    interface_enabled = yes
-    listen_ip = 127.0.0.1
-    listen_port = {listen_port}
+{interface}
 """
     with open(os.path.join(configdir, "config"), "w") as f:
         f.write(config)
@@ -48,8 +61,8 @@ def _write_config(configdir: str, listen_port: int) -> None:
 
 async def main() -> None:
     configdir = sys.argv[1]
-    listen_port = int(sys.argv[2])
-    _write_config(configdir, listen_port)
+    port = int(sys.argv[2])
+    _write_config(configdir, port, connect="--connect" in sys.argv[3:])
 
     RNS.Reticulum(configdir=configdir)
 

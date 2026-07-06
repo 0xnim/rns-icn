@@ -1,10 +1,11 @@
 """End-to-end integration test over a real two-node RNS mesh.
 
 Spawns a separate ICN origin server in its own process and Reticulum instance
-(``tests/_icn_origin.py``), connects this process to it over a localhost
-TCPInterface, then fetches content end-to-end. This exercises the real RNS
-stack — interfaces, announces, path resolution, Links, Channels, LinkFace and
-the Forwarder — rather than the in-memory ``TestFace``.
+(``tests/_icn_origin.py``), which connects over localhost TCP into this
+process's shared Reticulum instance (the ``shared_rns`` fixture), then fetches
+content end-to-end. This exercises the real RNS stack — interfaces, announces,
+path resolution, Links, Channels, LinkFace and the Forwarder — rather than the
+in-memory ``TestFace``.
 
 In-process loopback is impossible: RNS has no path to a destination living in
 the same instance, so two genuine instances (two processes) are required.
@@ -48,29 +49,6 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
-
-
-def _write_client_config(configdir: str, connect_port: int) -> None:
-    os.makedirs(configdir, exist_ok=True)
-    config = f"""[reticulum]
-  enable_transport = Yes
-  share_instance = No
-  panic_on_interface_error = No
-
-[logging]
-  loglevel = 3
-
-[interfaces]
-  [[TCP Client Interface]]
-    type = TCPClientInterface
-    interface_enabled = yes
-    target_host = 127.0.0.1
-    target_port = {connect_port}
-"""
-    with open(os.path.join(configdir, "config"), "w") as f:
-        f.write(config)
-
-
 @pytest.mark.skipif(
     not os.environ.get("RNS_INTEGRATION"),
     reason="Set RNS_INTEGRATION=1 to run integration tests",
@@ -83,6 +61,7 @@ class TestRNSIntegration:
         self.tmproot = tempfile.mkdtemp(prefix="rns_icn_itest_")
         self.origin_cfg = os.path.join(self.tmproot, "origin")
         self.client_cfg = os.path.join(self.tmproot, "client")
+        os.makedirs(self.client_cfg)
         self.proc = None
         yield
         if self.proc is not None and self.proc.poll() is None:
@@ -94,11 +73,12 @@ class TestRNSIntegration:
         shutil.rmtree(self.tmproot, ignore_errors=True)
 
     def _start_origin(self, port: int) -> dict:
-        """Launch the origin subprocess and wait for its ORIGIN_READY line."""
+        """Launch the origin subprocess (dialling into this process's shared
+        Reticulum on ``port``) and wait for its ORIGIN_READY line."""
         env = dict(os.environ)
         env["PYTHONPATH"] = REPO_ROOT + os.pathsep + env.get("PYTHONPATH", "")
         self.proc = subprocess.Popen(
-            [sys.executable, ORIGIN_SCRIPT, self.origin_cfg, str(port)],
+            [sys.executable, ORIGIN_SCRIPT, self.origin_cfg, str(port), "--connect"],
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             env=env,
@@ -113,19 +93,14 @@ class TestRNSIntegration:
                 return json.loads(line[len("ORIGIN_READY "):])
 
     @pytest.mark.asyncio
-    async def test_fetch_over_tcp_mesh(self):
-        port = _free_port()
-
-        # Origin handshake must complete before we bring up our Reticulum,
-        # since RNS.Reticulum() is a process singleton.
+    async def test_fetch_over_tcp_mesh(self, shared_rns):
+        # The origin dials into this process's shared Reticulum instance —
+        # RNS.Reticulum() is a process singleton, so the test process can
+        # never bring up a per-test instance of its own.
         loop = asyncio.get_running_loop()
-        info = await loop.run_in_executor(None, self._start_origin, port)
+        info = await loop.run_in_executor(None, self._start_origin, shared_rns.port)
         origin_hexhash = info["hexhash"]
         origin_identity_path = info["identity_path"]
-
-        # Bring up this process's Reticulum as a TCP client to the origin.
-        _write_client_config(self.client_cfg, port)
-        RNS.Reticulum(configdir=self.client_cfg)
 
         origin_identity = RNS.Identity.from_file(origin_identity_path)
         assert origin_identity is not None, "Could not load origin identity"
@@ -236,7 +211,7 @@ class TestRNSMultiHop:
     async def test_fetch_through_router(self):
         # All three nodes run as separate processes (separate Reticulum
         # instances). The parent test process never initialises RNS — RNS is a
-        # hard process singleton and the single-hop test already owns it there.
+        # hard process singleton owned by the shared_rns fixture in conftest.
         origin_port = _free_port()
         router_port = _free_port()
         loop = asyncio.get_running_loop()

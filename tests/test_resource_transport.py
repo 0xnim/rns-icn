@@ -5,17 +5,26 @@ Test plan:
   2. ResourceTransportError hierarchy
   3. ResourcePublisher construction (runs without RNS, just tests init)
   4. LargeContentPublisher construction and threshold behaviour
-  5. Integration: ResourcePublisher ↔ ResourceListener over RNS Shared Instance
+  5. Integration: ResourcePublisher ↔ ResourceListener over two real RNS
+     instances (publisher subprocess → this process, localhost TCP)
 """
 
 import asyncio
+import base64
+import hashlib
+import json
 import os
+import shutil
 import struct
+import subprocess
+import sys
 import tempfile
 
 import pytest
 
-from rns_icn.name import RNS_ADDR_BYTES, Name
+from rns_icn.chunker import chunk_content
+from rns_icn.manifest import ContentManifest
+from rns_icn.name import Name
 from rns_icn.packet import Data
 from rns_icn.resource_transport import (
     DEFAULT_RESOURCE_THRESHOLD,
@@ -28,15 +37,6 @@ from rns_icn.resource_transport import (
     _unwrap_payload,
     _wrap_payload,
 )
-
-
-def rns_addr(byte_val: int = 0x01) -> bytes:
-    return bytes([byte_val] + [0] * (RNS_ADDR_BYTES - 1))
-
-
-def content_hash(byte_val: int = 0xBB) -> bytes:
-    return bytes([byte_val] + [0] * 31)
-
 
 # ── Unit tests: wrap/unwrap helpers ──
 
@@ -112,379 +112,209 @@ def test_resource_publisher_init():
     assert publisher._link is mock_link
 
 
-# ── Integration test: Resource transport over Shared Instance ──
+# ── Integration tests: Resource transport between two real RNS instances ──
+
+
+PEER_SCRIPT = os.path.join(os.path.dirname(__file__), "_resource_peer.py")
+REPO_ROOT = os.path.dirname(os.path.dirname(__file__))
+
+APP_NAME = "icn"
 
 
 @pytest.mark.skipif(
     not os.environ.get("RNS_INTEGRATION"),
     reason="Set RNS_INTEGRATION=1 to run integration tests",
 )
-class TestResourceTransportIntegration:
-    """Full integration test: publish Data as RNS.Resource, receive on the other side.
+class _ResourceIntegrationBase:
+    """Receive side of the resource-transport round-trip.
 
-    Uses RNS SharedInstance for loopback transport between two identities.
-    ResourceListener attaches to the received link (Link.ACCEPT_APP strategy),
-    not to a Destination.
+    This process (the shared in-process Reticulum, see ``conftest.py``) owns
+    the IN destination and the ResourceListener; the publishing side runs in
+    a subprocess (``_resource_peer.py``) dialling in over localhost TCP,
+    because RNS has no path to a destination living in the same instance.
     """
 
     @pytest.fixture(autouse=True)
-    def setup_rns(self):
-        import RNS
-
-        if not RNS.Reticulum._running:
-            configdir = tempfile.mkdtemp(prefix="rns_icn_resource_")
-            os.environ["RNS_CONFIGDIR"] = configdir
-            RNS.Reticulum(configdir=configdir)
-            self.configdir = configdir
-        else:
-            self.configdir = None
+    def _peer_process(self):
+        self.tmproot = tempfile.mkdtemp(prefix="rns_icn_resource_")
+        self.proc = None
         yield
-        if self.configdir:
-            import shutil
-            shutil.rmtree(self.configdir, ignore_errors=True)
+        if self.proc is not None and self.proc.poll() is None:
+            self.proc.terminate()
+            try:
+                self.proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
+        shutil.rmtree(self.tmproot, ignore_errors=True)
 
-    @pytest.mark.asyncio
-    async def test_publish_small_data(self):
-        """Small Data packet sent via Resource arrives and is parsed correctly.
-
-        Uses a small payload that fits in a single RNS packet.
-        """
+    def _listening_destination(self, aspect: str, received: list[Data]):
+        """An IN destination collecting every ICN Data arriving via Resource."""
         import RNS
 
-        RNS.log_level = RNS.LOG_ERROR
-        identity_a = RNS.Identity()
-        identity_b = RNS.Identity()
-
-        # Server A: destination for receiving links + resources
-        dest_a = RNS.Destination(
-            identity_a,
-            RNS.Destination.IN,
-            RNS.Destination.SINGLE,
-            "icn", "resource_test_a",
+        identity = RNS.Identity()
+        dest = RNS.Destination(
+            identity, RNS.Destination.IN, RNS.Destination.SINGLE, APP_NAME, aspect
         )
-
-        # Server B: destination for sending resource to A
-        dest_b = RNS.Destination(
-            identity_b,
-            RNS.Destination.OUT,
-            RNS.Destination.SINGLE,
-            "icn", "resource_test_a",
-        )
-
-        received_data = None
-        got_callback = asyncio.Event()
-        link_a = None
 
         def on_incoming_link(link: RNS.Link):
-            nonlocal link_a
-            link_a = link
-            # Set up resource listening on the incoming link
             listener = ResourceListener(link)
+            listener.set_on_data(received.append)
 
-            def on_data(data: Data):
-                nonlocal received_data
-                received_data = data
-                got_callback.set()
+        dest.set_link_established_callback(on_incoming_link)
+        return identity, dest
 
-            listener.set_on_data(on_data)
+    def _spawn_peer(self, port: int, spec: dict) -> None:
+        spec_path = os.path.join(self.tmproot, "spec.json")
+        with open(spec_path, "w") as f:
+            json.dump(spec, f)
+        env = dict(os.environ)
+        env["PYTHONPATH"] = REPO_ROOT + os.pathsep + env.get("PYTHONPATH", "")
+        self.proc = subprocess.Popen(
+            [
+                sys.executable, PEER_SCRIPT,
+                os.path.join(self.tmproot, "peer"), str(port), spec_path,
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            env=env,
+            text=True,
+        )
 
-        dest_a.set_link_established_callback(on_incoming_link)
+    @staticmethod
+    def _item(labels: list[str], content: bytes) -> dict:
+        return {"labels": labels, "content_b64": base64.b64encode(content).decode()}
 
-        # Give RNS a moment to propagate destinations
-        await asyncio.sleep(1.0)
+    async def _receive(
+        self, dest, received: list[Data], count: int, timeout: float = 120.0
+    ) -> None:
+        """Wait until the peer has delivered ``count`` Data packets.
 
-        # Create an outbound link from B to A
-        link_b = RNS.Link(dest_b)
-        start = asyncio.get_event_loop().time()
-        while link_b.status != RNS.Link.ACTIVE:
-            await asyncio.sleep(0.1)
-            if asyncio.get_event_loop().time() - start > 30.0:
-                pytest.fail("Link establishment timed out")
+        Re-announces the destination while waiting: the peer resolves it via
+        path requests, which only reach us once its TCP link is up.
+        """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        next_announce = loop.time()
+        while len(received) < count:
+            if self.proc.poll() is not None:
+                pytest.fail(f"peer subprocess exited with code {self.proc.returncode}")
+            if loop.time() >= deadline:
+                pytest.fail(f"received {len(received)}/{count} Data packets before timeout")
+            if loop.time() >= next_announce:
+                dest.announce()
+                next_announce = loop.time() + 2.0
+            await asyncio.sleep(0.2)
 
-        # Wait for side A to also see the link
-        start = asyncio.get_event_loop().time()
-        while link_a is None:
-            await asyncio.sleep(0.1)
-            if asyncio.get_event_loop().time() - start > 5.0:
-                pytest.fail("Side A never got the incoming link")
 
-        # Publish a Data packet via Resource from B to A
-        name = Name(identity_a.hash, [b"resource_test"])
-        data = Data.new(name=name, content=b"Hello via RNS.Resource!")
-
-        publisher = ResourcePublisher(link_b)
-        ok = await publisher.publish_data(data, timeout=30.0)
-        assert ok, "publish_data returned False (timeout or error)"
-
-        # Wait for the receiving side to get the resource
-        await asyncio.wait_for(got_callback.wait(), timeout=30.0)
-
-        assert received_data is not None
-        assert received_data.name == name
-        assert received_data.content == b"Hello via RNS.Resource!"
-        assert received_data.metadata.content_hash is not None
-
-        # Cleanup
-        link_b.teardown()
+class TestResourceTransportIntegration(_ResourceIntegrationBase):
+    """Publish Data as RNS.Resource in one instance, receive it in another."""
 
     @pytest.mark.asyncio
-    async def test_publish_large_chunk(self):
+    async def test_publish_small_data(self, shared_rns):
+        """Small Data packet sent via Resource arrives and is parsed correctly."""
+        received: list[Data] = []
+        identity, dest = self._listening_destination("resource_test_a", received)
+
+        content = b"Hello via RNS.Resource!"
+        self._spawn_peer(shared_rns.port, {
+            "app_name": APP_NAME,
+            "aspect": "resource_test_a",
+            "dest_hexhash": dest.hash.hex(),
+            "name_root_hex": identity.hash.hex(),
+            "mode": "data",
+            "items": [self._item(["resource_test"], content)],
+        })
+        await self._receive(dest, received, 1)
+
+        data = received[0]
+        assert data.name == Name(identity.hash, [b"resource_test"])
+        assert data.content == content
+        assert data.metadata.content_hash is not None
+
+    @pytest.mark.asyncio
+    async def test_publish_large_chunk(self, shared_rns):
         """Large Data packet (~120 KB) sent via Resource is handled correctly.
 
         Tests segmentation support at the RNS level.
         """
-        import RNS
+        received: list[Data] = []
+        identity, dest = self._listening_destination("resource_test_large", received)
 
-        RNS.log_level = RNS.LOG_ERROR
-        identity_a = RNS.Identity()
-        identity_b = RNS.Identity()
-
-        dest_a = RNS.Destination(
-            identity_a,
-            RNS.Destination.IN,
-            RNS.Destination.SINGLE,
-            "icn", "resource_test_large",
-        )
-
-        dest_b = RNS.Destination(
-            identity_b,
-            RNS.Destination.OUT,
-            RNS.Destination.SINGLE,
-            "icn", "resource_test_large",
-        )
-
-        received_data = None
-        got_callback = asyncio.Event()
-        link_a = None
-
-        def on_incoming_link(link: RNS.Link):
-            nonlocal link_a
-            link_a = link
-            listener = ResourceListener(link)
-
-            def on_data(data: Data):
-                nonlocal received_data
-                received_data = data
-                got_callback.set()
-
-            listener.set_on_data(on_data)
-
-        dest_a.set_link_established_callback(on_incoming_link)
-
-        await asyncio.sleep(1.0)
-
-        link_b = RNS.Link(dest_b)
-        start = asyncio.get_event_loop().time()
-        while link_b.status != RNS.Link.ACTIVE:
-            await asyncio.sleep(0.1)
-            if asyncio.get_event_loop().time() - start > 30.0:
-                pytest.fail("Link establishment timed out")
-
-        start = asyncio.get_event_loop().time()
-        while link_a is None:
-            await asyncio.sleep(0.1)
-            if asyncio.get_event_loop().time() - start > 5.0:
-                pytest.fail("Side A never got the incoming link")
-
-        # Create ~120 KB of content (exceeds 100 KB threshold)
         large_content = b"X" * (120 * 1024)
-        name = Name(identity_a.hash, [b"large_resource_test"])
-        data = Data.new(name=name, content=large_content)
+        self._spawn_peer(shared_rns.port, {
+            "app_name": APP_NAME,
+            "aspect": "resource_test_large",
+            "dest_hexhash": dest.hash.hex(),
+            "name_root_hex": identity.hash.hex(),
+            "mode": "data",
+            "items": [self._item(["large_resource_test"], large_content)],
+        })
+        await self._receive(dest, received, 1)
 
-        publisher = ResourcePublisher(link_b)
-        ok = await publisher.publish_data(data, timeout=120.0)
-        assert ok, "publish_data for large chunk returned False"
-
-        await asyncio.wait_for(got_callback.wait(), timeout=120.0)
-
-        assert received_data is not None
-        assert received_data.name == name
-        assert len(received_data.content) == 120 * 1024
-        assert received_data.content == large_content
-
-        link_b.teardown()
+        data = received[0]
+        assert data.name == Name(identity.hash, [b"large_resource_test"])
+        assert len(data.content) == 120 * 1024
+        assert data.content == large_content
 
     @pytest.mark.asyncio
-    async def test_multiple_chunks_via_resource(self):
-        """Multiple Data packets sent as separate resources arrive correctly."""
-        import RNS
+    async def test_multiple_chunks_via_resource(self, shared_rns):
+        """Multiple Data packets sent as separate resources arrive in order."""
+        received: list[Data] = []
+        identity, dest = self._listening_destination("resource_test_multi", received)
 
-        RNS.log_level = RNS.LOG_ERROR
-        identity_a = RNS.Identity()
-        identity_b = RNS.Identity()
+        self._spawn_peer(shared_rns.port, {
+            "app_name": APP_NAME,
+            "aspect": "resource_test_multi",
+            "dest_hexhash": dest.hash.hex(),
+            "name_root_hex": identity.hash.hex(),
+            "mode": "data",
+            "items": [
+                self._item(["multi_test", str(i)], f"chunk_{i}".encode())
+                for i in range(3)
+            ],
+        })
+        await self._receive(dest, received, 3)
 
-        dest_a = RNS.Destination(
-            identity_a,
-            RNS.Destination.IN,
-            RNS.Destination.SINGLE,
-            "icn", "resource_test_multi",
-        )
-
-        dest_b = RNS.Destination(
-            identity_b,
-            RNS.Destination.OUT,
-            RNS.Destination.SINGLE,
-            "icn", "resource_test_multi",
-        )
-
-        received_packets = []
-        got_all = asyncio.Event()
-        link_a = None
-
-        def on_incoming_link(link: RNS.Link):
-            nonlocal link_a
-            link_a = link
-            listener = ResourceListener(link)
-
-            def on_data(data: Data):
-                received_packets.append(data)
-                if len(received_packets) == 3:
-                    got_all.set()
-
-            listener.set_on_data(on_data)
-
-        dest_a.set_link_established_callback(on_incoming_link)
-
-        await asyncio.sleep(1.0)
-
-        link_b = RNS.Link(dest_b)
-        start = asyncio.get_event_loop().time()
-        while link_b.status != RNS.Link.ACTIVE:
-            await asyncio.sleep(0.1)
-            if asyncio.get_event_loop().time() - start > 30.0:
-                pytest.fail("Link establishment timed out")
-
-        start = asyncio.get_event_loop().time()
-        while link_a is None:
-            await asyncio.sleep(0.1)
-            if asyncio.get_event_loop().time() - start > 5.0:
-                pytest.fail("Side A never got the incoming link")
-
-        publisher = ResourcePublisher(link_b)
-
-        # Send 3 Data packets as individual resources
+        assert len(received) == 3
         for i in range(3):
-            name = Name(identity_a.hash, [b"multi_test", str(i).encode()])
-            data = Data.new(name=name, content=f"chunk_{i}".encode())
-            ok = await publisher.publish_data(data, timeout=30.0)
-            assert ok, f"publish_data for chunk {i} returned False"
-
-        await asyncio.wait_for(got_all.wait(), timeout=60.0)
-
-        assert len(received_packets) == 3
-        for i in range(3):
-            label = f"chunk_{i}".encode()
-            assert label in received_packets[i].content
-
-        link_b.teardown()
+            assert f"chunk_{i}".encode() in received[i].content
 
 
-# ── Integration test: LargeContentPublisher with actual chunker content ──
-
-
-@pytest.mark.skipif(
-    not os.environ.get("RNS_INTEGRATION"),
-    reason="Set RNS_INTEGRATION=1 to run integration tests",
-)
-class TestLargeContentPublisherIntegration:
+class TestLargeContentPublisherIntegration(_ResourceIntegrationBase):
     """LargeContentPublisher sending chunked content via Resource."""
 
-    @pytest.fixture(autouse=True)
-    def setup_rns(self):
-        import RNS
-
-        if not RNS.Reticulum._running:
-            configdir = tempfile.mkdtemp(prefix="rns_icn_lcp_")
-            os.environ["RNS_CONFIGDIR"] = configdir
-            RNS.Reticulum(configdir=configdir)
-            self.configdir = configdir
-        else:
-            self.configdir = None
-        yield
-        if self.configdir:
-            import shutil
-            shutil.rmtree(self.configdir, ignore_errors=True)
-
     @pytest.mark.asyncio
-    async def test_large_content_publisher_threshold_behaviour(self):
-        """LargeContentPublisher publishes data packets via Resource.
+    async def test_large_content_publisher_threshold_behaviour(self, shared_rns):
+        """Every chunk of chunked content plus its manifest arrives intact."""
+        received: list[Data] = []
+        identity, dest = self._listening_destination("lcp_test", received)
 
-        Verifies the threshold property and that data are publishable.
-        """
-        import RNS
-
-        from rns_icn.chunker import chunk_content
-
-        RNS.log_level = RNS.LOG_ERROR
-        identity_a = RNS.Identity()
-        identity_b = RNS.Identity()
-
-        dest_a = RNS.Destination(
-            identity_a,
-            RNS.Destination.IN,
-            RNS.Destination.SINGLE,
-            "icn", "lcp_test",
-        )
-
-        dest_b = RNS.Destination(
-            identity_b,
-            RNS.Destination.OUT,
-            RNS.Destination.SINGLE,
-            "icn", "lcp_test",
-        )
-
-        received_packets = {}
-        got_manifest = asyncio.Event()
-        link_a = None
-
-        def on_incoming_link(link: RNS.Link):
-            nonlocal link_a
-            link_a = link
-            listener = ResourceListener(link)
-
-            def on_data(data: Data):
-                received_packets[str(data.name)] = data
-                got_manifest.set()
-
-            listener.set_on_data(on_data)
-
-        dest_a.set_link_established_callback(on_incoming_link)
-
-        await asyncio.sleep(1.0)
-
-        link_b = RNS.Link(dest_b)
-        start = asyncio.get_event_loop().time()
-        while link_b.status != RNS.Link.ACTIVE:
-            await asyncio.sleep(0.1)
-            if asyncio.get_event_loop().time() - start > 30.0:
-                pytest.fail("Link establishment timed out")
-
-        start = asyncio.get_event_loop().time()
-        while link_a is None:
-            await asyncio.sleep(0.1)
-            if asyncio.get_event_loop().time() - start > 5.0:
-                pytest.fail("Side A never got the incoming link")
-
-        # Chunk some content
         content = b"Hello from chunked content over RNS.Resource! " * 50
-        name = Name(identity_a.hash, [b"chunked_over_resource"])
-        result = chunk_content(content, name, chunk_size=200)
+        name = Name(identity.hash, [b"chunked_over_resource"])
+        # Chunk locally with the same parameters the peer uses: chunking is
+        # deterministic, so this yields the expected packet count and chunk
+        # hashes without comparing whole packets (timestamps differ).
+        expected = chunk_content(content, name, chunk_size=200)
 
-        # Publish all data packets via LargeContentPublisher
-        lcp = LargeContentPublisher(link_b, resource_threshold=128)  # small threshold for test
-        for data in result.data_packets:
-            ok = await lcp.publish_data_packet(data, timeout=30.0)
-            assert ok, f"Failed to publish {data.name}"
+        self._spawn_peer(shared_rns.port, {
+            "app_name": APP_NAME,
+            "aspect": "lcp_test",
+            "dest_hexhash": dest.hash.hex(),
+            "name_root_hex": identity.hash.hex(),
+            "mode": "chunked",
+            "chunk_size": 200,
+            "resource_threshold": 128,
+            "items": [self._item(["chunked_over_resource"], content)],
+        })
+        await self._receive(dest, received, len(expected.data_packets) + 1)
 
-        # Also publish the manifest as a Data packet
-        manifest_data = Data.new(name=name, content=result.manifest.to_json())
-        ok = await lcp.publish_data_packet(manifest_data, timeout=30.0)
-        assert ok, "Failed to publish manifest"
+        by_name = {str(d.name): d for d in received}
+        manifest = ContentManifest.from_data(by_name.pop(str(name)))
+        assert manifest.chunks == expected.manifest.chunks
+        assert manifest.content_hash == expected.manifest.content_hash
 
-        # Allow time for all resources to arrive
-        await asyncio.sleep(3.0)
-
-        # Verify at least some data arrived
-        assert len(received_packets) > 0, "No data packets received"
-
-        link_b.teardown()
+        received_hashes = {
+            hashlib.blake2b(d.content, digest_size=32).digest()
+            for d in by_name.values()
+        }
+        assert received_hashes == {c.content_hash for c in manifest.chunks}
