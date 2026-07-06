@@ -208,7 +208,7 @@ cleanly until heal). The surface it converged on, now landed as protocol API:
 | fetch-latest | `ICNClient.fetch_latest` | existed |
 | fetch-range | `ICNClient.fetch_range(prefix, peer, start_sequence, max_items)` | verified, gap-tolerant sequence walk — the backfill primitive |
 | subscribe | `ICNClient.subscribe(prefix, peer, callback, start_from_now)` | verified push: same pipeline as a fetch before the callback fires |
-| resolve | `RNS.Identity.recall` + `Transport.request_path` loop | apps need "destination hash → producer identity"; currently hand-rolled in Wire, should become one ABI call |
+| resolve | `ICNClient.resolve(destination_hash, timeout)` | "destination hash → verified producer identity" — one call now; asks the mesh for the path, the answering announce carries the identity keys. Was hand-rolled in Wire (`recall` + `request_path` loop), extracted after the harvest |
 | store-local | app-owned SQLite (`wire/store.py`) | follow list, per-feed read cursor, producer seq high-water: the "user owns state" primitive — a local KV in ABI terms |
 | canonical encode | `cbor2` (RFC 8949 §4.2 canonical form) | first external dependency an app actually needed; the sandbox must provide canonical-CBOR encode/decode |
 

@@ -101,6 +101,33 @@ revalidates to the origin), verifies it, then fetches the exact content-hash-pin
 target it names. Falls back to the best-effort `latest` child selector only when
 no pointer exists. See PROTOCOL.md §14.1.
 
+### `async fetch_range(prefix, peer_hash, start_sequence=0, max_items=None, timeout=None, max_retries=None) -> AsyncIterator[Data]`
+
+Walk a collection's editions in sequence order, each passing the full verify
+pipeline — the backfill primitive. Gap-tolerant: every step asks for "the next
+edition ≥ N" (OLDEST child selector with a `min_sequence` floor), never an
+exact sequence. Stops after `max_items` editions, or when nothing newer is
+available — which may mean caught-up, or partitioned from anyone holding more.
+
+### `async subscribe(prefix, peer_hash, callback, start_from_now=True) -> None`
+
+Upgrade the link to push mode: APS-subscribe to `prefix` on the peer. Each
+pushed `Data` runs the same verify pipeline as a fetch before `callback` fires
+on the event loop. With `start_from_now=False` the producer first replays its
+existing content; either way anything offline-queued for this subscriber is
+drained, so a resubscribe after a disconnect delivers what was missed.
+
+### `async resolve(destination_hash, timeout=None) -> RNS.Identity | None`
+
+The producer's identity from its RNS destination hash. ICN names are rooted in
+the producer's *identity* hash (the name is the key), but what apps share and
+dial are *destination* hashes; `resolve` bridges the two — the returned
+identity's `.hash` is the address the producer's names live under, and its keys
+verify their signatures. If the identity isn't known locally, the mesh is asked
+for the producer's path and the answering announce carries the keys. `timeout`
+defaults to `config.path_request_timeout`; returns `None` when no announce
+arrives (e.g. partitioned from everyone who has heard the producer).
+
 ### `async fetch_manifest(peer_hash, ...) -> Manifest | None` · `async fetch_content(...)`
 
 Manifest-driven discovery: fetch a producer's content index, then fetch entries

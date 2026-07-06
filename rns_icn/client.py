@@ -28,6 +28,12 @@ from .packet import (
     parse_packet,
 )
 
+# resolve() cadence: how often to check whether the announce arrived, and how
+# often to re-ask the mesh for the path (path requests are datagrams — on a
+# lossy mesh a single one can simply be gone).
+_RESOLVE_POLL_INTERVAL = 0.25
+_RESOLVE_REREQUEST_INTERVAL = 2.5
+
 
 class ICNClient:
     """ICN Consumer client: expresses Interests, fetches Data over RNS mesh.
@@ -342,6 +348,48 @@ class ICNClient:
             min_seq = seq + 1
             yielded += 1
             yield data
+
+    async def resolve(
+        self,
+        destination_hash: bytes,
+        timeout: float | None = None,
+    ) -> RNS.Identity | None:
+        """Resolve a producer's identity from its RNS destination hash.
+
+        ICN names are rooted in the producer's *identity* hash (the name is
+        the key), but what apps share and dial — announce addresses,
+        ``known_peers`` entries — are *destination* hashes. This bridges the
+        two: the returned identity's ``.hash`` is the address the producer's
+        names live under, and its keys are what verify their signatures.
+
+        When the identity isn't already known locally, the mesh is asked for
+        the producer's path; a transport node holding it answers with the
+        producer's announce, which carries the identity keys — deterministic,
+        instead of hoping to overhear a periodic announce in time. The request
+        is retried until ``timeout`` (default ``config.path_request_timeout``);
+        returns None if no announce arrives — e.g. partitioned from everyone
+        who has heard the producer.
+        """
+        if self._identity is None:
+            raise RuntimeError("Client not started. Call start() or use as context manager.")
+        identity = RNS.Identity.recall(destination_hash)
+        if identity is not None:
+            return identity
+        timeout = timeout if timeout is not None else self.config.path_request_timeout
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        next_request = loop.time()
+        while True:
+            now = loop.time()
+            if now >= next_request:
+                RNS.Transport.request_path(destination_hash)
+                next_request = now + _RESOLVE_REREQUEST_INTERVAL
+            await asyncio.sleep(min(_RESOLVE_POLL_INTERVAL, max(deadline - now, 0)))
+            identity = RNS.Identity.recall(destination_hash)
+            if identity is not None:
+                return identity
+            if loop.time() >= deadline:
+                return None
 
     async def subscribe(
         self,
