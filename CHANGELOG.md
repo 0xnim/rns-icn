@@ -3,17 +3,15 @@
 All notable changes to this project are documented here. The format is loosely
 based on [Keep a Changelog](https://keepachangelog.com/).
 
-> **Wire stability:** the project has not been published and the on-wire protocol
-> is **unstable** for the entire `0.x` series — the packet format, signed-byte
-> layout, and protocol-version value may change between `0.x` commits without a
-> SemVer-breaking release. The normative format lives in
-> [PROTOCOL.md](PROTOCOL.md). The backward-compatibility guarantees described
-> there take effect at `1.0`.
+> **Wire stability:** the on-wire protocol is **unstable** for the entire `0.x`
+> series — the packet format, signed-byte layout, and protocol-version value may
+> change between `0.x` releases without a SemVer-breaking bump. The normative
+> format lives in [PROTOCOL.md](PROTOCOL.md). Backward-compatibility guarantees
+> described there take effect at `1.0`.
 
-## [0.1.0] — unreleased
+## [0.1.0] — 2026-07-07
 
-First end-to-end ICN-over-RNS stack. Nothing here has shipped yet, so the wire
-is still being shaped in place.
+First end-to-end ICN-over-RNS stack. The 0.x wire is still being shaped.
 
 ### Protocol & security
 
