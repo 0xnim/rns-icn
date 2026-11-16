@@ -163,7 +163,15 @@ class _FakeLink:
     """Minimal stand-in for RNS.Link so LinkFace can be constructed in-process."""
 
     def __init__(self):
+        from types import SimpleNamespace
+
         self.mdu = 500
+        # The client attaches a ResourceListener (Data larger than the Channel
+        # MDU arrives as an RNS Resource), which sets these on a real Link.
+        self.resource_strategy = None
+        self.callbacks = SimpleNamespace(
+            resource=None, resource_started=None, resource_concluded=None
+        )
 
     def get_channel(self):
         return _FakeChannel()

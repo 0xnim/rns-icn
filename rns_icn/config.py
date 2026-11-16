@@ -22,6 +22,11 @@ class KnownPeer:
     destination_hash: str  # 32-char hex
     identity_path: str | None = None
     aliases: list[str] = field(default_factory=list)
+    # Router only: keep this peer's content in the local cache ahead of demand
+    # (rns_icn.follow). Requires identity_path. follow_labels restricts the
+    # follow to those top-level labels; empty = the whole namespace.
+    follow: bool = False
+    follow_labels: list[str] = field(default_factory=list)
 
     def destination_bytes(self) -> bytes:
         """Return destination hash as bytes."""
@@ -70,6 +75,9 @@ class ClientConfig:
     # client's identity; the client verifies the producer's signature, unwraps
     # the CEK, and decrypts matching encrypted Data. Default: none.
     capabilities: list[str] = field(default_factory=list)
+    # Fetch over RNS request/response when the peer advertises it (fewer
+    # packets per fetch than the Channel). False forces the Channel binding.
+    use_request_binding: bool = True
     log_level: str = "INFO"
     log_json: bool = False
 
@@ -117,6 +125,14 @@ class ServerConfig:
     pit_purge_interval: float = 5.0
     resource_threshold: int = 100_000
     known_peers: list[KnownPeer] = field(default_factory=list)
+    # Seconds between manifest re-checks of followed peers (rns_icn.follow).
+    # 0 = only on (re)connect; live pushes still arrive in between.
+    follow_resync_interval: float = 0.0
+    # NomadNet-compatible page front end (rns_icn.pages): lets existing
+    # Reticulum page browsers read what this node holds. Off by default.
+    pages_enabled: bool = False
+    pages_node_name: str = "ICN cache"
+    pages_announce_interval: float = 1800.0
     log_level: str = "INFO"
     log_json: bool = False
     http_enabled: bool = False
@@ -179,6 +195,7 @@ def _dict_to_client_config(data: dict[str, Any], base_path: str) -> ClientConfig
         max_retry_delay=data.get("max_retry_delay", 30.0),
         require_signature=data.get("require_signature", False),
         reject_rollback=data.get("reject_rollback", False),
+        use_request_binding=data.get("use_request_binding", True),
         capabilities=[
             str((base_dir / p).expanduser()) for p in data.get("capabilities", [])
         ],
@@ -202,6 +219,8 @@ def _dict_to_server_config(data: dict[str, Any], base_path: str) -> ServerConfig
                 destination_hash=kp["destination_hash"],
                 identity_path=identity_path,
                 aliases=kp.get("aliases", []),
+                follow=bool(kp.get("follow", False)),
+                follow_labels=list(kp.get("follow_labels", [])),
             )
         )
 
@@ -247,6 +266,10 @@ def _dict_to_server_config(data: dict[str, Any], base_path: str) -> ServerConfig
         pit_purge_interval=data.get("pit_purge_interval", 5.0),
         resource_threshold=data.get("resource_threshold", 100_000),
         known_peers=known_peers,
+        follow_resync_interval=float(data.get("follow_resync_interval", 0.0)),
+        pages_enabled=bool(data.get("pages_enabled", False)),
+        pages_node_name=str(data.get("pages_node_name", "ICN cache")),
+        pages_announce_interval=float(data.get("pages_announce_interval", 1800.0)),
         log_level=data.get("log_level", "INFO"),
         log_json=data.get("log_json", False),
         http_enabled=data.get("http_enabled", False),

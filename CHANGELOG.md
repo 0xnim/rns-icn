@@ -9,6 +9,43 @@ based on [Keep a Changelog](https://keepachangelog.com/).
 > format lives in [PROTOCOL.md](PROTOCOL.md). Backward-compatibility guarantees
 > described there take effect at `1.0`.
 
+## [Unreleased]
+
+### Added
+
+- **Follow** (`rns_icn.follow`): a router can keep a known peer's content in its
+  cache ahead of demand (`follow = true` on the peer). New editions arrive by
+  push; what was missed is pulled by manifest diff on (re)connect.
+- **NomadNet page front end** (`rns_icn.pages`, `pages_enabled`): serves what a
+  node holds as pages on a `nomadnetwork.node` destination, so existing
+  Reticulum page browsers can read it.
+- **Request binding** (PROTOCOL.md §3.1): Interests as RNS link requests, used
+  by `ICNClient` when the peer advertises it. Fewer packets per fetch.
+- **Benchmark** (`bench/run.py`): ICN through a hub vs a NomadNet-style page
+  fetch over rate-limited links between real Reticulum instances, with bytes
+  per link and an optional per-packet trace.
+
+### Changed
+
+- An origin builds its manifest on every request and advances the manifest
+  sequence when the listed content changes; the manifest lists every blob under
+  a label and no longer lists itself or reserved discovery objects.
+- The accepting side of a link sends its CapPeer with the peer's first Channel
+  packet instead of at link establishment (PROTOCOL.md §9.3).
+- Announce `app_data` gains a transport-feature byte and is also set as the
+  destination default, so path responses carry it.
+
+### Fixed
+
+- `LinkPool` tore down links that had not been requested from the pool for
+  120 s even while they carried traffic, killing a router's upstream link
+  mid-transfer and withdrawing its routes. Idleness now looks at the link's own
+  activity, and servers keep links until Reticulum reports them dead.
+- `ICNClient` could not receive Data larger than the Channel MDU (sent as an RNS
+  Resource); it now listens for Resources like the server does.
+- Manifest names: labels that are valid hex (`feed`, `cafe`, `2026`) were parsed
+  as hex bytes, so names read from a manifest did not match the published ones.
+
 ## [0.1.0] — 2026-07-07
 
 First end-to-end ICN-over-RNS stack. The 0.x wire is still being shaped.

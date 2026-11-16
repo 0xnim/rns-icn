@@ -26,6 +26,7 @@ class LinkPool:
         loop: asyncio.AbstractEventLoop | None = None,
         connect_timeout: float = 120.0,
         path_request_timeout: float = 30.0,
+        idle_timeout: float | None = 120.0,
     ):
         self.identity = identity
         self.app_name = app_name
@@ -34,6 +35,10 @@ class LinkPool:
         self._loop = loop or asyncio.get_event_loop()
         self.connect_timeout = connect_timeout
         self.path_request_timeout = path_request_timeout
+        # Seconds a link may go unused before the monitor closes it; None keeps
+        # links for as long as Reticulum considers them alive (servers, whose
+        # upstream links carry forwarded traffic and pushes).
+        self.idle_timeout = idle_timeout
         self._links: dict[bytes, RNS.Link] = {}      # peer_hash -> link
         self._health: dict[bytes, float] = {}        # peer_hash -> last_activity_ts
         self._monitor_task: asyncio.Task | None = None
@@ -215,12 +220,33 @@ class LinkPool:
             self._teardown(link)
             raise
 
+    def _link_is_idle(self, link) -> bool:
+        """Whether the link itself has carried no data for the idle timeout.
+
+        ``_health`` only records when a caller last asked the pool for the
+        link. A caller that holds the link and keeps using it (a face) never
+        asks again, so the link's own activity has to be checked too — or an
+        in-flight transfer gets torn down underneath it.
+        """
+        no_data_for = getattr(link, "no_data_for", None)
+        if no_data_for is None or self.idle_timeout is None:
+            return True
+        try:
+            return no_data_for() > self.idle_timeout
+        except Exception:
+            return True
+
     async def _monitor_links(self) -> None:
         """Periodic health check — remove dead links."""
         while self._running:
             await asyncio.sleep(30)
+            if self.idle_timeout is None:
+                continue
             now = time.time()
-            dead = [h for h, t in self._health.items() if now - t > 120]
+            dead = [
+                h for h, t in self._health.items()
+                if now - t > self.idle_timeout and self._link_is_idle(self._links.get(h))
+            ]
             for h in dead:
                 if h in self._links:
                     try:

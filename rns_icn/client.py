@@ -57,6 +57,8 @@ class ICNClient:
         self._capability_store: dict[bytes, list[access.Capability]] = {}
         # face id → reader task pumping that face's packets into the forwarder.
         self._pump_tasks: dict[int, asyncio.Task] = {}
+        # face id → listener for Data arriving as an RNS Resource on that link.
+        self._resource_listeners: dict[int, object] = {}
         # (prefix, callback) pairs served by the shared push dispatcher.
         self._subscriptions: list[tuple[Name, Callable[[Data], None]]] = []
 
@@ -612,8 +614,28 @@ class ICNClient:
             # dead next-hop's routes are withdrawn instead of black-holing.
             _loop.call_soon_threadsafe(forwarder.withdraw_face, fid)
 
-        link_face = LinkFace(face_id, link, loop=loop, on_closed=_withdraw)
+        link_face = LinkFace(
+            face_id, link, loop=loop, on_closed=_withdraw,
+            request_path=self._request_path_for(link),
+        )
         forwarder.register_face(link_face)
+
+        # A peer sends Data larger than the Channel MDU as an RNS Resource
+        # (LinkFace.send_data). Feed those into the same queue as Channel
+        # packets; without this the client can only receive single-packet Data.
+        from .resource_transport import ResourceListener
+
+        def _on_resource_data(data: Data, _queue=link_face._recv_queue, _loop=loop) -> None:
+            raw = data.to_bytes()  # copy on the RNS thread, deliver on the loop
+            try:
+                _loop.call_soon_threadsafe(_queue.put_nowait, raw)
+            except RuntimeError:
+                pass  # event loop already shut down
+
+        listener = ResourceListener(link, max_data_size=16 * 1024 * 1024)
+        listener.set_on_data(_on_resource_data)
+        self._resource_listeners[face_id] = listener  # keep it alive with the face
+
         task = asyncio.create_task(self._pump_face(face_id, link_face))
         self._pump_tasks[face_id] = task
 
@@ -628,6 +650,22 @@ class ICNClient:
 
         task.add_done_callback(completed)
         return face_id
+
+    def _request_path_for(self, link: RNS.Link) -> str | None:
+        """The request-binding path if the peer advertises it, else None.
+
+        Fetching by request costs one acknowledgement instead of three and no
+        capability handshake; peers that do not advertise it get the Channel.
+        """
+        from .rns_server import REQUEST_PATH, peer_supports_request
+
+        if not self.config.use_request_binding:
+            return None
+        try:
+            app_data = RNS.Identity.recall_app_data(link.destination.hash)
+        except Exception:
+            return None
+        return REQUEST_PATH if peer_supports_request(app_data) else None
 
     async def _pump_face(self, face_id: FaceId, link_face: LinkFace) -> None:
         """Deliver packets arriving on a link face into the forwarder.

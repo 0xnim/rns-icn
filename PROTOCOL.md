@@ -107,6 +107,39 @@ ahead of it.
 RNS `Destination`s for ICN use app name `"icn"`; the default aspect is
 `"default"`. Servers announce their destination so peers can discover a path.
 
+### 3.1 Request binding
+
+A server **MAY** also answer Interests through RNS request/response on the same
+destination, and a consumer **SHOULD** prefer it for plain fetches when it is
+advertised:
+
+* The consumer sends `Link.request` on path `"/icn"` with the serialized
+  Interest ([§7](#7-interest)) as the request data.
+* The response is one serialized packet: the answering Data
+  ([§8](#8-data)), or a NACK ([§9.5](#95-nack-0x07)) when the server cannot
+  satisfy the Interest. RNS carries a response larger than the link MDU as a
+  Resource by itself; no `0x49` tag is added.
+* The server waits for an upstream answer for at most the Interest lifetime.
+
+The packets are byte-for-byte the same as on the Channel; only the carrier
+differs. The saving is in acknowledgements: a Channel exchange costs a proof
+for the Interest, one for the Data and, on a fresh link, the capability
+handshake ([§9.3](#93-capability-peer-0x05)), while a request/response costs
+one proof in total. Subscriptions, pushes and all control packets stay on the
+Channel.
+
+**Advertisement.** Announce `app_data` is `b"icn"`, a role byte
+([§9.3](#93-capability-peer-0x05) values) and a transport-feature byte:
+
+| Bit | Mask | Meaning |
+|-----|------|---------|
+| 0 | `0x01` | Request binding on path `"/icn"` |
+
+A peer whose `app_data` is shorter than five bytes, or has bit 0 clear, does
+not offer the request binding and **MUST** be reached over the Channel. A
+server **MUST** set the same `app_data` as the destination default so path
+responses carry it too.
+
 ---
 
 ## 4. Primitive encodings
@@ -363,8 +396,11 @@ Handshake establishing a propagation peering between two servers.
 
 ### 9.3 Capability Peer (`0x05`)
 
-Exchanged immediately after link establishment so each side learns the other's
-role and supported features.
+Exchanged on a link so each side learns the other's role and supported
+features. The side that opened the link sends its CapPeer once the link is
+established; the side that accepted it sends its own with the peer's first
+Channel packet. A consumer that only uses the request binding
+([§3.1](#31-request-binding)) sends no Channel packet and so is not sent one.
 
 ```
 [0x05][version:u8]                          # §6, currently 1

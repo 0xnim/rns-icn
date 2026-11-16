@@ -292,10 +292,10 @@ def _parse_name(s: str) -> Name:
     rns_addr = bytes.fromhex(parts[0])
     if len(rns_addr) != RNS_ADDR_BYTES:
         raise ManifestError(f"RNS address must be {RNS_ADDR_BYTES} bytes")
-    path = []
-    for p in parts[1:]:
-        try:
-            path.append(bytes.fromhex(p))
-        except ValueError:
-            path.append(p.encode("utf-8"))
+    # Inverse of Name.__str__, which writes every UTF-8-decodable component as
+    # text. Trying hex first would turn text labels that happen to be valid hex
+    # ("feed", "cafe", "2026") into different bytes, so the parsed name would no
+    # longer match the published one. The display form cannot round-trip a
+    # non-UTF-8 component; the wire form (Name.to_bytes) is the one to use there.
+    path = [p.encode("utf-8") for p in parts[1:]]
     return Name(rns_addr, path, content_hash)

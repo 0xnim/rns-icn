@@ -14,6 +14,9 @@ from rns_icn.server import ICNServer, ServerRole
 _ORIGIN_APP_DATA = b"icn\x00"
 _CACHE_APP_DATA = b"icn\x01"
 _PROP_APP_DATA = b"icn\x02"
+# The RNS server appends a transport-feature byte (bit 0: request binding,
+# PROTOCOL.md §3) to what it announces.
+_RNS_FEATURES = b"\x01"
 
 
 def _make_mock_identity(prefix_byte: int):
@@ -63,7 +66,7 @@ async def test_announce_called_on_start():
         await _start(server)
 
         mock_dest_class.assert_called_once()
-        mock_dest.announce.assert_called_once_with(app_data=_ORIGIN_APP_DATA)
+        mock_dest.announce.assert_called_once_with(app_data=_ORIGIN_APP_DATA + _RNS_FEATURES)
         mock_dest.set_link_established_callback.assert_called_once()
 
         await server.shutdown()
@@ -148,7 +151,7 @@ async def test_announce_default_app_data():
 
         server.announce()
 
-        mock_dest.announce.assert_called_once_with(app_data=_ORIGIN_APP_DATA)
+        mock_dest.announce.assert_called_once_with(app_data=_ORIGIN_APP_DATA + _RNS_FEATURES)
 
         await server.shutdown()
 
@@ -242,7 +245,7 @@ async def test_rns_server_announce_with_cache_role():
         server = RNSICNServer(_cfg(aspect="cache-test", role=ServerRole.CACHE))
         await _start(server)
 
-        mock_dest.announce.assert_called_once_with(app_data=_CACHE_APP_DATA)
+        mock_dest.announce.assert_called_once_with(app_data=_CACHE_APP_DATA + _RNS_FEATURES)
         await server.shutdown()
 
 
@@ -261,5 +264,5 @@ async def test_rns_server_announce_with_propagation_role():
         server = RNSICNServer(_cfg(aspect="prop-test", role=ServerRole.PROPAGATION))
         await _start(server)
 
-        mock_dest.announce.assert_called_once_with(app_data=_PROP_APP_DATA)
+        mock_dest.announce.assert_called_once_with(app_data=_PROP_APP_DATA + _RNS_FEATURES)
         await server.shutdown()

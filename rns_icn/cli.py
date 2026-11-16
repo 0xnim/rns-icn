@@ -94,6 +94,8 @@ async def server_main() -> int:
         await server.start()
         print(f"  Destination: {server.hexhash}")
         print(f"  Listening on /{config.app_name}/{config.aspect}")
+        # Held (not directly used) so the announce loop is not garbage-collected.
+        _pages_task = _start_pages(server, config)
         print("Ready. Press Ctrl+C to stop.")
 
         # If HTTP enabled, start it
@@ -110,6 +112,35 @@ async def server_main() -> int:
     finally:
         await server.shutdown()
     return 0
+
+
+def _start_pages(server: ICNServer, config) -> asyncio.Task | None:
+    """Serve the node's content to NomadNet-compatible page browsers.
+
+    Returns the periodic-announce task (hold a reference to keep it alive), or
+    None when the front end is disabled.
+    """
+    if not config.pages_enabled:
+        return None
+    import RNS
+
+    from .pages import PageNode
+
+    nicknames: dict[bytes, str] = {}
+    for peer in config.known_peers:
+        if peer.identity_path:
+            identity = RNS.Identity.from_file(peer.identity_path)
+            if identity is not None:
+                nicknames[identity.hash] = peer.name
+    node = PageNode(server, node_name=config.pages_node_name, nicknames=nicknames)
+    print(f"  Pages: {node.hexhash} (NomadNet page node \"{config.pages_node_name}\")")
+
+    async def _announce_loop() -> None:
+        while True:
+            node.announce()
+            await asyncio.sleep(max(60.0, config.pages_announce_interval))
+
+    return asyncio.ensure_future(_announce_loop())
 
 
 def _peer_route_cost(dest_hash_hex: str, default: int = 10) -> int:
@@ -161,7 +192,35 @@ async def _install_peer_route(server: ICNServer, peer) -> tuple[str, Name] | Non
     cost = _peer_route_cost(peer.destination_hash)
     server.forwarder.add_route(prefix, face_id, cost=cost)
     print(f"  Route: /{identity.hash.hex()} → {peer.name} (face #{face_id}, cost {cost})")
+    if getattr(peer, "follow", False):
+        _start_follow(server, peer, identity, face_id)
     return (peer.name, prefix)
+
+
+def _start_follow(server: ICNServer, peer, identity, face_id: int) -> None:
+    """Keep a followed peer's content in the local cache ahead of demand.
+
+    Pushes from the peer are cached on the strength of the link being to that
+    producer, so refuse to follow when the configured destination is not the
+    one derived from the peer's identity file.
+    """
+    import RNS
+
+    expected = RNS.Destination.hash(
+        identity, server.config.app_name, server.config.aspect
+    ).hex()
+    if expected != peer.destination_hash.lower():
+        print(f"  ! Not following '{peer.name}': destination_hash does not belong "
+              f"to the identity in {peer.identity_path}", file=sys.stderr)
+        return
+    server.follower.follow(
+        face_id,
+        identity.hash,
+        labels=list(peer.follow_labels),
+        resync_interval=server.config.follow_resync_interval,
+    )
+    scope = ", ".join(peer.follow_labels) if peer.follow_labels else "everything"
+    print(f"  Follow: {peer.name} ({scope})")
 
 
 async def _install_peer_routes(server: ICNServer, config) -> list[tuple[str, Name]]:
@@ -249,6 +308,8 @@ async def router_main() -> int:
         installed = await _install_peer_routes(server, config)
         # Withdraw routes on link drop and re-install on the peer's next announce.
         _wire_route_reinstall(server, config)
+        # Held (not directly used) so the announce loop is not garbage-collected.
+        _pages_task = _start_pages(server, config)
         print(f"Ready. {len(installed)} upstream route(s) installed. Press Ctrl+C to stop.")
 
         if config.http_enabled:

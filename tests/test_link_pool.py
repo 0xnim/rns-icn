@@ -102,6 +102,50 @@ async def test_monitor_links_evicts_idle_links():
     assert peer not in pool._health
 
 
+async def _run_monitor_once(pool):
+    pool._running = True
+
+    async def fake_sleep(_seconds):
+        pool._running = False
+
+    with patch("rns_icn.link_pool.asyncio.sleep", side_effect=fake_sleep):
+        await pool._monitor_links()
+
+
+@pytest.mark.asyncio
+async def test_monitor_links_keeps_a_link_that_is_carrying_data():
+    """A link held by a face is never re-requested from the pool; while it is
+    moving data it must not be torn down as idle (this killed in-flight
+    transfers on a router's upstream link)."""
+    pool = _pool()
+    peer = b"\x07" * 16
+    link = _mock_link()
+    link.no_data_for.return_value = 3.0
+    pool._links[peer] = link
+    pool._health[peer] = 0.0
+
+    await _run_monitor_once(pool)
+
+    link.teardown.assert_not_called()
+    assert pool._links[peer] is link
+
+
+@pytest.mark.asyncio
+async def test_monitor_links_never_evicts_when_idle_timeout_is_disabled():
+    pool = _pool()
+    pool.idle_timeout = None
+    peer = b"\x08" * 16
+    link = _mock_link()
+    link.no_data_for.return_value = 10_000.0
+    pool._links[peer] = link
+    pool._health[peer] = 0.0
+
+    await _run_monitor_once(pool)
+
+    link.teardown.assert_not_called()
+    assert pool._links[peer] is link
+
+
 def test_resolve_identity_prefers_config_then_recall():
     peer = b"\x05" * 16
     configured = MagicMock()

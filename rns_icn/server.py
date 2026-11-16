@@ -16,10 +16,12 @@ import hashlib
 import time
 from collections.abc import Callable
 
+from . import discovery
 from .aps import APSManager
 from .content_store import ContentStore
 from .face import Face, FaceCapabilities, FaceId
 from .fib import Fib
+from .follow import Follower
 from .forwarder import Forwarder
 from .manifest import EntryKind, Manifest, ManifestEntry
 from .metrics import metrics
@@ -115,11 +117,16 @@ class ICNServer:
         self.offline_queue = OfflineQueue(self, max_age_seconds=86400)
         self.aps = APSManager(self)
         self.propagation = PropagationManager(self)
+        self.follower = Follower(self)
         self._next_face_id: FaceId = 100
         self._faces: dict[FaceId, Face] = {}
         self._face_send_queues: dict[FaceId, asyncio.Queue] = {}
         # name_hash → highest invalidation epoch applied, for replay/loop drop.
         self._seen_invalidations: dict[bytes, int] = {}
+        # Manifest versioning: the sequence advances whenever the listed content
+        # changes, so a follower can tell a new manifest from a replayed one.
+        self._manifest_seq = 0
+        self._manifest_digest: bytes | None = None
 
     def _icn_app_data(self) -> bytes:
         """Build announce app_data with server role encoded."""
@@ -240,6 +247,7 @@ class ICNServer:
         manifest = Manifest.create(
             producer=self.rns_addr,
             entries=entries,
+            sequence=self._next_manifest_sequence(entries),
         )
         content = manifest.to_json()
         content_hash = hashlib.blake2b(content, digest_size=32).digest()  # noqa
@@ -251,12 +259,35 @@ class ICNServer:
         self._maybe_sign(data)
         return data
 
+    def _next_manifest_sequence(self, entries: list[ManifestEntry]) -> int:
+        """Manifest sequence: advances only when the listed content changes.
+
+        Seeded from the clock so it stays monotonic across restarts. The
+        per-build timestamps on stream entries are left out of the comparison.
+        """
+        h = hashlib.blake2b(digest_size=16)
+        for e in sorted(entries, key=lambda e: (e.label, str(e.name))):
+            h.update(repr((
+                e.kind.value, e.label, str(e.name), e.content_hash, e.size,
+                e.latest_sequence, e.total_items,
+            )).encode())
+        digest = h.digest()
+        if digest != self._manifest_digest:
+            self._manifest_digest = digest
+            self._manifest_seq = max(self._manifest_seq + 1, int(time.time()))
+        return self._manifest_seq
+
     def _build_manifest_entries(self) -> list[ManifestEntry]:
         """Build manifest entries from CS contents. Override for custom."""
         our_prefix = Name(self.rns_addr, [])
+        manifest_name = Name(self.rns_addr, [b"manifest"])
         groups: dict[str, list[Data]] = {}
         # Group CS entries by their label (second component)
         for entry_name in list(getattr(self.forwarder.cs, "_entries", {}).keys()):
+            # The manifest lists content, not itself or the reserved discovery
+            # objects (latest-pointers) that live beside the content.
+            if entry_name == manifest_name or discovery.is_reserved(entry_name):
+                continue
             if entry_name.starts_with(our_prefix) and not entry_name.is_root():
                 label_bytes = entry_name.components[1] if len(entry_name.components) > 1 else b""
                 label = label_bytes.decode("utf-8", errors="replace")
@@ -285,44 +316,51 @@ class ICNServer:
                     )
                 )
             else:
-                # Blob entry — use the first data we found for this label
-                data = data_list[0]
-                entries.append(
-                    ManifestEntry(
-                        kind=EntryKind.BLOB,
-                        label=label,
-                        name=data.name.without_content_hash(),
-                        content_hash=data.metadata.content_hash,
-                        size=len(data.content),
+                # One blob entry per name, so a manifest reader can find every
+                # item under the label rather than only the first.
+                for data in sorted(data_list, key=lambda d: d.name.to_bytes()):
+                    path = data.name.components[1:]
+                    entries.append(
+                        ManifestEntry(
+                            kind=EntryKind.BLOB,
+                            label=(
+                                label if len(data_list) == 1
+                                else "/".join(c.decode("utf-8", errors="replace") for c in path)
+                            ),
+                            name=data.name.without_content_hash(),
+                            content_hash=data.metadata.content_hash,
+                            size=len(data.content),
+                        )
                     )
-                )
         return entries
+
+    async def resolve(self, interest: Interest, in_face: FaceId = 0) -> Data | None:
+        """Answer an Interest from this node: own manifest, cache, then upstream.
+
+        Transport-independent — used for Interests arriving on a face and for
+        ones arriving through the request binding (PROTOCOL.md §3).
+        """
+        # Our own manifest is built on request, ahead of the cache: a stored
+        # copy would hide content published since it was built.
+        if interest.name == Name(self.rns_addr, [b"manifest"]):
+            manifest_data = await self._build_manifest_data()
+            self.forwarder.cs.insert(manifest_data.name, manifest_data)
+            return manifest_data
+
+        data = self._serve_from_cs(interest, in_face)
+        if data is not None:
+            return data
+
+        # Forward upstream if we have a route
+        return await self.forwarder.express(interest, in_face)
 
     async def handle_interest(self, interest: Interest, face_id: FaceId) -> None:
         """Process an incoming Interest."""
-        # Check local CS
-        data = self._serve_from_cs(interest, face_id)
+        data = await self.resolve(interest, face_id)
         if data is not None:
             face = self._faces.get(face_id)
             if face:
                 await face.send_data(data)
-            return
-
-        # If the name is our manifest, generate it
-        if interest.name == Name(self.rns_addr, [b"manifest"]):
-            manifest_data = await self._build_manifest_data()
-            self.forwarder.cs.insert(manifest_data.name, manifest_data)
-            face = self._faces.get(face_id)
-            if face:
-                await face.send_data(manifest_data)
-            return
-
-        # Forward upstream if we have a route
-        result = await self.forwarder.express(interest, face_id)
-        if result is not None:
-            face = self._faces.get(face_id)
-            if face:
-                await face.send_data(result)
             return
 
         # Unsatisfiable: tell a NACK-capable downstream so it can fail over to a
@@ -462,6 +500,9 @@ class ICNServer:
             # If this is from a propagation peer, propagate to other peers
             if self.propagation.is_peer(face_id):
                 await self.propagation.handle_peer_data(pkt.data, face_id)
+            elif self.follower.accepts_push(pkt.data, face_id):
+                # Unsolicited Data from a producer we follow: cache and relay.
+                await self.follower.handle_push(pkt.data, face_id)
             else:
                 await self.handle_data(pkt.data, face_id)
         elif pkt.subscribe is not None:

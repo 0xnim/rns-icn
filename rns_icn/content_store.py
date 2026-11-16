@@ -365,6 +365,26 @@ class ContentStore:
         self._misses += 1
         return None
 
+    def listing(self, prefix: Name | None = None) -> list[tuple[Name, int | None, int, int]]:
+        """Names held, without their content: (name, sequence, inserted_at, size).
+
+        With ``prefix`` only names under it are returned. For directory-style
+        views (page front end, tooling) that must not load every payload.
+        """
+        self._purge_expired_internal()
+        if prefix is None:
+            rows = self._conn.execute(
+                "SELECT name_bytes, sequence, inserted_at, size_bytes FROM content"
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                """SELECT c.name_bytes, c.sequence, c.inserted_at, c.size_bytes
+                   FROM content c JOIN name_prefixes np ON c.name_hash = np.name_hash
+                   WHERE np.prefix_hash = ?""",
+                (self._prefix_hash(prefix),),
+            ).fetchall()
+        return [(Name.from_bytes(nb), seq, at, size) for nb, seq, at, size in rows]
+
     def _verify_content(self, content_bytes: bytes, metadata_json: str) -> bool:
         try:
             meta = json.loads(metadata_json)

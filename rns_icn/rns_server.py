@@ -41,7 +41,10 @@ from .packet import (
     FEATURE_PROPAGATION,
     CapPeer,
     Data,
+    Interest,
     Invalidate,
+    Nack,
+    NackReason,
 )
 from .peer_discovery import PeerDiscoveryManager
 from .resource_transport import (
@@ -66,6 +69,29 @@ def _verify_invalidation(inv: Invalidate) -> bool:
     if identity is None:
         return False
     return inv.verify_signature(identity.validate)
+
+
+def _producer_validator(producer_addr: bytes):
+    """Signature validator for a producer recalled from the mesh, or None."""
+    identity = RNS.Identity.recall(producer_addr, from_identity_hash=True)
+    return identity.validate if identity is not None else None
+
+
+# Request binding (PROTOCOL.md §3): request path on the ICN destination, and the
+# announce app_data bit that advertises it.
+REQUEST_PATH = "/icn"
+ANNOUNCE_FEATURE_REQUEST = 0x01
+# Longest a request thread waits for an upstream answer, whatever the Interest
+# lifetime claims.
+REQUEST_MAX_WAIT = 300.0
+
+
+def peer_supports_request(app_data: bytes | None) -> bool:
+    """Whether an announce's app_data advertises the request binding."""
+    return (
+        app_data is not None and len(app_data) >= 5 and app_data[:3] == b"icn"
+        and bool(app_data[4] & ANNOUNCE_FEATURE_REQUEST)
+    )
 
 
 class ICNServer(BaseICNServer):
@@ -107,10 +133,16 @@ class ICNServer(BaseICNServer):
             invalidation_verifier=_verify_invalidation,
             pit_max=config.pit_max_entries,
         )
+        # Followed producers' pushes are verified against their mesh identity.
+        self.follower._validator_for = _producer_validator
 
         # Per-face features advertised by each peer's CapPeer handshake, used to
         # gate optional behaviour (e.g. only NACK peers that support it).
         self._peer_features: dict[FaceId, int] = {}
+        # Incoming faces we have not sent our CapPeer to yet. It goes out with
+        # the peer's first Channel packet, so a consumer that only uses the
+        # request binding (§3) is never sent a handshake it has no use for.
+        self._caps_pending: set[FaceId] = set()
 
         # Replace in-memory ContentStore with SQLite-backed persistent store
         from .content_store import ContentStore as SQLiteContentStore
@@ -153,6 +185,9 @@ class ICNServer(BaseICNServer):
             app_name=self.app_name,
             aspect=self.aspect,
             known_peers=config.known_peers,
+            # A server's links carry forwarded traffic, subscriptions and
+            # follows; they stay up until Reticulum itself reports them dead.
+            idle_timeout=None,
         )
 
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -184,8 +219,47 @@ class ICNServer(BaseICNServer):
         self._started_rns = False
 
     def _icn_app_data(self) -> bytes:
-        """Build announce app_data with server role encoded."""
-        return b"icn" + bytes([self.role.value])
+        """Announce app_data: ``b"icn"``, role byte, transport-feature byte."""
+        return b"icn" + bytes([self.role.value, ANNOUNCE_FEATURE_REQUEST])
+
+    async def resolve(self, interest, in_face: FaceId = 0):
+        """Answer an Interest, including this node's health name."""
+        if is_health_interest(interest.name):
+            health = await handle_health_interest(self, interest.name, in_face)
+            if health:
+                return Data.new(
+                    name=interest.name, content=json.dumps(health).encode("utf-8")
+                )
+        return await super().resolve(interest, in_face)
+
+    def _serve_request(self, path, data, request_id, link_id, remote_identity, requested_at):
+        """Request binding (PROTOCOL.md §3): an Interest in, Data or a NACK out.
+
+        Runs on a Reticulum request thread, one per request, so waiting for an
+        upstream answer here does not hold up other traffic.
+        """
+        loop = self._loop
+        if loop is None or not isinstance(data, (bytes, bytearray)):
+            return None
+        try:
+            interest = Interest.from_bytes(bytes(data))
+        except Exception:
+            metrics.record_malformed_packet()
+            return None
+        wait = min(interest.lifetime_ms / 1000.0, REQUEST_MAX_WAIT)
+        future = asyncio.run_coroutine_threadsafe(self.resolve(interest), loop)
+        try:
+            result = future.result(wait + 1.0)
+        except Exception:
+            future.cancel()
+            result = None
+        if result is None:
+            reason = (
+                NackReason.CONGESTION if self.forwarder.pit.is_full()
+                else NackReason.NO_ROUTE
+            )
+            return Nack(name=interest.name, reason=reason).to_bytes()
+        return result.to_bytes()
 
     async def __aenter__(self) -> ICNServer:
         await self.start()
@@ -222,6 +296,15 @@ class ICNServer(BaseICNServer):
             self.aspect,
         )
         self.destination.set_link_established_callback(self._on_incoming_link)
+        # Path responses are announces Reticulum builds itself; without a
+        # default they carry no app_data, and a peer that learned of us that
+        # way would not see our role or transport features.
+        self.destination.set_default_app_data(self._icn_app_data)
+        self.destination.register_request_handler(
+            REQUEST_PATH,
+            response_generator=self._serve_request,
+            allow=RNS.Destination.ALLOW_ALL,
+        )
 
         # Start link pool (handles outbound links)
         await self._link_pool.start()
@@ -277,6 +360,9 @@ class ICNServer(BaseICNServer):
 
         # Stop peer discovery
         self.discovery.stop()
+
+        # Stop following upstream producers
+        self.follower.stop()
 
         # Cancel periodic announce loop
         if self._announce_task is not None:
@@ -360,12 +446,10 @@ class ICNServer(BaseICNServer):
             lambda lk, ident: RNS.log(f"ICN: Link identity verified: {ident}")
         )
 
-        # Register in discovery and send our capabilities
+        # Register in discovery; our capabilities follow the peer's first
+        # Channel packet (see handle_incoming).
         self.discovery.update_peer_face(peer_hash, face.id())
-        if self._loop is not None:
-            asyncio.run_coroutine_threadsafe(
-                self._send_capabilities(face.id(), peer_hash), self._loop
-            )
+        self._caps_pending.add(face.id())
 
     async def connect(self, peer_hash: str) -> FaceId | None:
         """Establish an outbound Link to a peer ICN server using LinkPool.
@@ -435,8 +519,10 @@ class ICNServer(BaseICNServer):
     def _cleanup_closed_face(self, face_id: FaceId) -> None:
         """Withdraw a closed face's routes and drop it (event-loop side)."""
         self.forwarder.withdraw_face(face_id)
+        self.follower.unfollow_face(face_id)
         self._faces.pop(face_id, None)
         self._peer_features.pop(face_id, None)
+        self._caps_pending.discard(face_id)
         self.discovery.clear_face(face_id)
         RNS.log(f"ICN: face #{face_id} closed — FIB routes withdrawn")
         if self.on_face_closed is not None:
@@ -677,6 +763,12 @@ class ICNServer(BaseICNServer):
 
     async def handle_incoming(self, face_id: FaceId, raw: bytes) -> None:
         """Handle incoming packets, including CapPeer for discovery."""
+        if face_id in self._caps_pending:
+            # First Channel packet on an accepted link: the peer speaks the
+            # Channel binding, so complete the capability exchange now.
+            self._caps_pending.discard(face_id)
+            peer = self.discovery.peer_hash_for_face(face_id) or f"face_{face_id}"
+            await self._send_capabilities(face_id, peer)
         try:
             from .packet import parse_packet
             pkt = parse_packet(raw)

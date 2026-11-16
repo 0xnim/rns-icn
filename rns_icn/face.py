@@ -149,12 +149,18 @@ class LinkFace(Face):
 
     def __init__(self, face_id: FaceId, link: RNS.Link, loop: asyncio.AbstractEventLoop | None = None,
                  on_closed: Callable[[FaceId], None] | None = None, *,
-                 channel_send_timeout: float = 4.0):
+                 channel_send_timeout: float = 4.0,
+                 request_path: str | None = None):
         from RNS.Channel import CEType, ChannelException, MessageBase
 
         if not math.isfinite(channel_send_timeout) or channel_send_timeout <= 0:
             raise ValueError("channel_send_timeout must be finite and positive")
         self._channel_send_timeout = channel_send_timeout
+        # Request binding (PROTOCOL.md §3): when set, Interests travel as RNS
+        # link requests on this path and the answer comes back as the response,
+        # instead of both going over the Channel. Everything else (subscribe,
+        # pushes, control packets) still uses the Channel.
+        self._request_path = request_path
 
         class _ICNMessage(MessageBase):
             """Channel message wrapping raw ICN Interest/Data bytes."""
@@ -223,8 +229,40 @@ class LinkFace(Face):
 
     CHANNEL_READY_POLL = 0.01
 
+    def _send_request(self, raw: bytes) -> None:
+        """Send an Interest as a link request; deliver the response like a packet."""
+        try:
+            lifetime = Interest.from_bytes(raw).lifetime_ms / 1000.0
+        except Exception:
+            lifetime = self._channel_send_timeout
+
+        def deliver(receipt) -> None:
+            response = getattr(receipt, "response", None)
+            if self._closed or not isinstance(response, (bytes, bytearray)) or not response:
+                return
+            try:
+                self._loop.call_soon_threadsafe(self._recv_queue.put_nowait, bytes(response))
+            except RuntimeError:
+                logger.debug("request response arrived after event loop shutdown")
+
+        receipt = self._link.request(
+            self._request_path,
+            data=raw,
+            response_callback=deliver,
+            # A failed request needs no signal: the Interest simply expires.
+            failed_callback=lambda _receipt: None,
+            timeout=lifetime,
+        )
+        if receipt is False:
+            raise ConnectionError("could not send request on link")
+
     async def _send(self, raw: bytes, timeout: float | None = None) -> None:
         """Wait for Channel capacity, bounded by one deadline; never discard bytes."""
+        if self._request_path is not None and raw[:1] == b"\x01":  # Interest
+            if self._closed:
+                raise ConnectionError("cannot send on a closed face")
+            self._send_request(raw)
+            return
         if timeout is None:
             timeout = self._channel_send_timeout
         deadline = self._loop.time() + timeout

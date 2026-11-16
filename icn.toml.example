@@ -101,6 +101,29 @@ name = "peer-1"
 destination_hash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 identity_path = "~/.icn/peer1_identity"
 
+# Follow (icn-router): keep a peer's content in the local cache before anyone
+# asks for it, so the first reader is served locally and the content stays
+# available while the producer is offline. Set on a known peer:
+#
+#   [[server.known_peers]]
+#   name = "weather"
+#   destination_hash = "..."
+#   identity_path = "~/.icn/weather_identity"   # required for follow
+#   follow = true
+#   follow_labels = ["feed"]    # optional: only these top-level labels
+#
+# New editions arrive by push; what was missed while disconnected is pulled on
+# reconnect. follow_resync_interval adds a periodic manifest re-check (seconds,
+# 0 = off) for content that is published without a push.
+follow_resync_interval = 0
+
+# NomadNet page front end: serve what this node holds as pages that existing
+# Reticulum clients (NomadNet, MeshChat, rBrowser, ...) can browse. The node
+# announces a "nomadnetwork.node" destination on the same identity.
+pages_enabled = false
+pages_node_name = "ICN cache"
+pages_announce_interval = 1800
+
 # Logging
 log_level = "INFO"
 log_json = false
