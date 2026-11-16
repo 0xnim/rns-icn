@@ -95,6 +95,7 @@ async def server_main() -> int:
         print(f"  Destination: {server.hexhash}")
         print(f"  Listening on /{config.app_name}/{config.aspect}")
         # Held (not directly used) so the announce loop is not garbage-collected.
+        _publish_task = _start_publish_dir(server, config)
         _pages_task = _start_pages(server, config)
         print("Ready. Press Ctrl+C to stop.")
 
@@ -112,6 +113,28 @@ async def server_main() -> int:
     finally:
         await server.shutdown()
     return 0
+
+
+def _start_publish_dir(server: ICNServer, config) -> asyncio.Task | None:
+    """Publish the files under ``config.publish_dir`` and keep them in step."""
+    if not config.publish_dir:
+        return None
+    from .publish_dir import DirectoryPublisher
+
+    publisher = DirectoryPublisher(server, config.publish_dir)
+    print(f"  Publishing files from {publisher.root}")
+
+    async def _loop() -> None:
+        while True:
+            try:
+                published, withdrawn = publisher.scan()
+                if published or withdrawn:
+                    print(f"  publish_dir: {published} published, {withdrawn} withdrawn")
+            except Exception as e:
+                print(f"  ! publish_dir scan failed: {e}", file=sys.stderr)
+            await asyncio.sleep(max(1.0, config.publish_dir_interval))
+
+    return asyncio.ensure_future(_loop())
 
 
 def _start_pages(server: ICNServer, config) -> asyncio.Task | None:
@@ -355,6 +378,7 @@ async def router_main() -> int:
         if config.route_via_holders:
             _wire_holder_routes(server)
         # Held (not directly used) so the announce loop is not garbage-collected.
+        _publish_task = _start_publish_dir(server, config)
         _pages_task = _start_pages(server, config)
         print(f"Ready. {len(installed)} upstream route(s) installed. Press Ctrl+C to stop.")
 

@@ -123,6 +123,13 @@ follow_resync_interval = 0
 # not listed in known_peers.
 route_via_holders = false
 
+# Publish every file under a directory as /<this node>/<relative path>. Changed
+# files are re-published and removed files withdrawn, checked every
+# publish_dir_interval seconds. Hidden files, names starting with "_" and files
+# over 256 KB are skipped.
+# publish_dir = "~/.icn/publish"
+# publish_dir_interval = 30
+
 # NomadNet page front end: serve what this node holds as pages that existing
 # Reticulum clients (NomadNet, MeshChat, rBrowser, ...) can browse. The node
 # announces a "nomadnetwork.node" destination on the same identity.

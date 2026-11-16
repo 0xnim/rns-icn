@@ -134,6 +134,10 @@ class ServerConfig:
     route_via_holders: bool = False
     # NomadNet-compatible page front end (rns_icn.pages): lets existing
     # Reticulum page browsers read what this node holds. Off by default.
+    # Publish every file under this directory as /<this node>/<relative path>,
+    # re-checked every publish_dir_interval seconds (rns_icn.publish_dir).
+    publish_dir: str | None = None
+    publish_dir_interval: float = 30.0
     pages_enabled: bool = False
     pages_node_name: str = "ICN cache"
     pages_announce_interval: float = 1800.0
@@ -272,6 +276,11 @@ def _dict_to_server_config(data: dict[str, Any], base_path: str) -> ServerConfig
         known_peers=known_peers,
         follow_resync_interval=float(data.get("follow_resync_interval", 0.0)),
         route_via_holders=bool(data.get("route_via_holders", False)),
+        publish_dir=(
+            str((base_dir / data["publish_dir"]).expanduser())
+            if data.get("publish_dir") else None
+        ),
+        publish_dir_interval=float(data.get("publish_dir_interval", 30.0)),
         pages_enabled=bool(data.get("pages_enabled", False)),
         pages_node_name=str(data.get("pages_node_name", "ICN cache")),
         pages_announce_interval=float(data.get("pages_announce_interval", 1800.0)),

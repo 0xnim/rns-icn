@@ -26,6 +26,8 @@ based on [Keep a Changelog](https://keepachangelog.com/).
   the nearest node heard holding that producer; a router with
   `route_via_holders = true` routes producers it has no configured route for
   the same way.
+- **Publish directory** (`rns_icn.publish_dir`, `publish_dir`): files under a
+  directory are published as this node's content and kept in step with it.
 - **Benchmark** (`bench/run.py`): ICN through a hub vs a NomadNet-style page
   fetch over rate-limited links between real Reticulum instances, with bytes
   per link and an optional per-packet trace.
