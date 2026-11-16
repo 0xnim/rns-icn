@@ -134,11 +134,35 @@ Channel.
 | Bit | Mask | Meaning |
 |-----|------|---------|
 | 0 | `0x01` | Request binding on path `"/icn"` |
+| 1 | `0x02` | A holds list follows ([§3.2](#32-holder-advertisement)) |
 
 A peer whose `app_data` is shorter than five bytes, or has bit 0 clear, does
 not offer the request binding and **MUST** be reached over the Channel. A
 server **MUST** set the same `app_data` as the destination default so path
 responses carry it too.
+
+### 3.2 Holder advertisement
+
+A node that keeps other producers' content ahead of demand **MAY** list those
+producers in its announce, so that others can find it as a place to ask
+without configuration. With feature bit 1 set, `app_data` continues after the
+feature byte with:
+
+| Field | Size | Meaning |
+|-------|------|---------|
+| count | 1 | Number of entries, 0–8 |
+| producer | 16 each | Producer address (the first name component) |
+
+A receiver **MUST** ignore the list if `count` exceeds 8 or the data is shorter
+than `count` entries, and **MUST** treat each announce's list as replacing the
+previous one from that destination. The announcing identity's own address is
+implicitly held and is not listed.
+
+The list is a hint. A holder may no longer have a given item and answers with
+a NACK or forwards as usual; a consumer **MUST** verify Data exactly as if it
+had come from the producer. A receiver **SHOULD** prefer the holder with the
+fewest Reticulum hops, and **SHOULD** forget a holder it has not heard from in
+six hours.
 
 ---
 

@@ -128,6 +128,10 @@ class ServerConfig:
     # Seconds between manifest re-checks of followed peers (rns_icn.follow).
     # 0 = only on (re)connect; live pushes still arrive in between.
     follow_resync_interval: float = 0.0
+    # Route Interests for a producer with no configured route to the nearest
+    # node that announces holding its content (rns_icn.holders). Off by
+    # default: it opens links to nodes that are not in known_peers.
+    route_via_holders: bool = False
     # NomadNet-compatible page front end (rns_icn.pages): lets existing
     # Reticulum page browsers read what this node holds. Off by default.
     pages_enabled: bool = False
@@ -267,6 +271,7 @@ def _dict_to_server_config(data: dict[str, Any], base_path: str) -> ServerConfig
         resource_threshold=data.get("resource_threshold", 100_000),
         known_peers=known_peers,
         follow_resync_interval=float(data.get("follow_resync_interval", 0.0)),
+        route_via_holders=bool(data.get("route_via_holders", False)),
         pages_enabled=bool(data.get("pages_enabled", False)),
         pages_node_name=str(data.get("pages_node_name", "ICN cache")),
         pages_announce_interval=float(data.get("pages_announce_interval", 1800.0)),

@@ -138,6 +138,10 @@ class Follower:
     def stats(self) -> dict[str, FollowStats]:
         return {p.hex(): e.stats for p, e in self._by_producer.items()}
 
+    def producers(self) -> list[bytes]:
+        """Addresses of the producers being followed, in a stable order."""
+        return sorted(self._by_producer)
+
     def is_following(self, producer: bytes) -> bool:
         return producer in self._by_producer
 

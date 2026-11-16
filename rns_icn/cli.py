@@ -266,6 +266,50 @@ def _wire_route_reinstall(server: ICNServer, config) -> None:
     server.discovery.add_callback(_on_rediscovered)
 
 
+def _wire_holder_routes(server: ICNServer) -> None:
+    """Route producers nobody configured to the nearest announced holder.
+
+    When a node announces that it holds a producer's content and there is no
+    route for that producer, link to the nearest such node and route to it. The
+    route stays until its link closes; the next announce installs a new one.
+    A holder that turns out not to have an item costs a NACK, and Data is still
+    checked against the producer's signature by whoever consumes it.
+    """
+    pending: set[bytes] = set()
+
+    async def _install(producer: bytes) -> None:
+        try:
+            if server.forwarder.fib.lookup(Name(producer)):
+                return
+            holders = server.holders.holders_of(producer)
+            own = server.destination.hash if server.destination is not None else None
+            holders = [h for h in holders if h.destination_hash != own]
+            if not holders:
+                return
+            dest_hex = holders[0].destination_hash.hex()
+            face_id = await server.connect(dest_hex)
+            if face_id is None:
+                return
+            cost = _peer_route_cost(dest_hex)
+            server.forwarder.add_route(Name(producer), face_id, cost=cost)
+            print(f"  Route: /{producer.hex()} → holder {dest_hex[:16]} "
+                  f"(face #{face_id}, cost {cost})")
+        finally:
+            pending.discard(producer)
+
+    def _on_holder(producer: bytes, destination_hash: bytes) -> None:
+        # Fires on the RNS thread.
+        if producer == server.rns_addr or server.follower.is_following(producer):
+            return
+        loop = server._loop
+        if loop is None or producer in pending:
+            return
+        pending.add(producer)
+        asyncio.run_coroutine_threadsafe(_install(producer), loop)
+
+    server.holders.add_callback(_on_holder)
+
+
 async def router_main() -> int:
     """icn-router binary entry point.
 
@@ -308,6 +352,8 @@ async def router_main() -> int:
         installed = await _install_peer_routes(server, config)
         # Withdraw routes on link drop and re-install on the peer's next announce.
         _wire_route_reinstall(server, config)
+        if config.route_via_holders:
+            _wire_holder_routes(server)
         # Held (not directly used) so the announce loop is not garbage-collected.
         _pages_task = _start_pages(server, config)
         print(f"Ready. {len(installed)} upstream route(s) installed. Press Ctrl+C to stop.")

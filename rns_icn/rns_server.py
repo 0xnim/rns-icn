@@ -27,6 +27,7 @@ from . import access, discovery
 from .config import ServerConfig
 from .face import FaceId, LinkFace
 from .health import handle_health_interest, is_health_interest
+from .holders import ANNOUNCE_FEATURE_REQUEST, HolderDirectory, encode_app_data
 from .icn_logging import setup_logging
 from .link_pool import LinkPool
 from .manifest import EntryKind, Manifest, ManifestEntry
@@ -77,10 +78,16 @@ def _producer_validator(producer_addr: bytes):
     return identity.validate if identity is not None else None
 
 
+def _hops_to(destination_hash: bytes) -> int | None:
+    try:
+        return RNS.Transport.hops_to(destination_hash)
+    except Exception:
+        return None
+
+
 # Request binding (PROTOCOL.md §3): request path on the ICN destination, and the
 # announce app_data bit that advertises it.
 REQUEST_PATH = "/icn"
-ANNOUNCE_FEATURE_REQUEST = 0x01
 # Longest a request thread waits for an upstream answer, whatever the Interest
 # lifetime claims.
 REQUEST_MAX_WAIT = 300.0
@@ -206,6 +213,8 @@ class ICNServer(BaseICNServer):
 
         # Peer discovery
         self.discovery: PeerDiscoveryManager = PeerDiscoveryManager(self)
+        # Which nodes hold which producer's content, learned from announces.
+        self.holders = HolderDirectory(hops_to=_hops_to)
 
         # Optional hook fired (on the event loop) after a face's routes are
         # withdrawn on link close. The router sets this to re-establish the link
@@ -219,8 +228,14 @@ class ICNServer(BaseICNServer):
         self._started_rns = False
 
     def _icn_app_data(self) -> bytes:
-        """Announce app_data: ``b"icn"``, role byte, transport-feature byte."""
-        return b"icn" + bytes([self.role.value, ANNOUNCE_FEATURE_REQUEST])
+        """Announce app_data: ``b"icn"``, role byte, feature byte, holds list.
+
+        Followed producers are listed so others can find this node as a place
+        to fetch their content (PROTOCOL.md §3.2).
+        """
+        return encode_app_data(
+            self.role.value, ANNOUNCE_FEATURE_REQUEST, self.follower.producers()
+        )
 
     async def resolve(self, interest, in_face: FaceId = 0):
         """Answer an Interest, including this node's health name."""
@@ -487,9 +502,26 @@ class ICNServer(BaseICNServer):
         RNS.log(f"ICN: Outbound link established → face #{face.id()}")
         return face.id()
 
+    @staticmethod
+    def _request_path_for(link: RNS.Link) -> str | None:
+        """Request-binding path for a link this node opened, if the peer offers it.
+
+        Upstream fetches then cost one acknowledgement and have no Channel
+        retransmission timer, which on a slow link fires before a large Data
+        packet has finished arriving and sends it again.
+        """
+        if not getattr(link, "initiator", False):
+            return None
+        try:
+            app_data = RNS.Identity.recall_app_data(link.destination.hash)
+        except Exception:
+            return None
+        return REQUEST_PATH if peer_supports_request(app_data) else None
+
     def _make_link_face(self, face_id: FaceId, link: RNS.Link) -> LinkFace:
         link_face = LinkFace(
-            face_id, link, loop=self._loop, on_closed=self._on_face_closed
+            face_id, link, loop=self._loop, on_closed=self._on_face_closed,
+            request_path=self._request_path_for(link),
         )
         self.forwarder.register_face(link_face)
         self._faces[face_id] = link_face

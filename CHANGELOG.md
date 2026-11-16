@@ -21,11 +21,23 @@ based on [Keep a Changelog](https://keepachangelog.com/).
   Reticulum page browsers can read it.
 - **Request binding** (PROTOCOL.md §3.1): Interests as RNS link requests, used
   by `ICNClient` when the peer advertises it. Fewer packets per fetch.
+- **Holder discovery** (`rns_icn.holders`, PROTOCOL.md §3.2): a node lists the
+  producers it follows in its announce. `ICNClient.fetch_nearest(name)` asks
+  the nearest node heard holding that producer; a router with
+  `route_via_holders = true` routes producers it has no configured route for
+  the same way.
 - **Benchmark** (`bench/run.py`): ICN through a hub vs a NomadNet-style page
   fetch over rate-limited links between real Reticulum instances, with bytes
   per link and an optional per-packet trace.
 
 ### Changed
+
+- A server uses the request binding on links it opens (upstream fetches), not
+  only when serving. On a slow link the Channel's retransmission timer fired
+  while a large Data packet was still arriving and sent it again; a cold 2 KB
+  fetch over two 1200 bit/s links timed out because of it.
+- Benchmark links use a 500-byte MTU (`BENCH_MTU`) instead of whatever
+  Reticulum negotiates over TCP.
 
 - An origin builds its manifest on every request and advances the manifest
   sequence when the listed content changes; the manifest lists every blob under

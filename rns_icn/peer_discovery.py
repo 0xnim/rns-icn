@@ -237,6 +237,13 @@ class PeerDiscoveryManager:
         hex_hash = dest_hash.hex()
         now = time.time()
 
+        holders = getattr(self._server, "holders", None)
+        if holders is not None:
+            try:
+                holders.observe(dest_hash, announced_identity.hash, app_data, now)
+            except Exception as e:
+                logger.warning("PeerDiscovery: holder update failed: %s", e)
+
         existing = self._peers.get(hex_hash)
         if existing is not None:
             # Update existing entry

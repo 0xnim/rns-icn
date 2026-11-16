@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import threading
 import math
+import threading
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass

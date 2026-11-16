@@ -220,12 +220,13 @@ link. Grey is the existing page fetch; blue is ICN in three states of the hub's 
     <details><summary>Table</summary><div id="backFastT"></div></details>
   </figure>
 </div>
-<p class="note">The 2 KB cold ICN fetch used 4,988 backhaul bytes, about twice the item: something was
-retransmitted. Earlier clean runs of the same fetch used 2,612 to 2,804.</p>
+<p class="note">Links carry 500-byte packets, as a radio link would, so the 2 KB item travels as a
+Reticulum Resource and is compressed on the way. An empty-cache ICN fetch now costs slightly fewer
+backhaul bytes than the page fetch, because the hub also uses the request binding upstream.</p>
 
 <figure>
   <figcaption>Backhaul bytes as more readers arrive</figcaption>
-  <p class="sub">Cumulative, for every reader fetching both items (200 B and 2 KB). Following costs 4,552 bytes up front; fetching on demand costs the first reader's transfer.</p>
+  <p class="sub">Cumulative, for every reader fetching both items (200 B and 2 KB). Following costs 3,595 bytes up front; fetching on demand costs the first reader's transfer.</p>
   <div class="legend">
     <span class="line" style="--k:var(--series-1);">page from origin</span>
     <span class="line" style="--k:var(--series-2);">ICN, cached on first request</span>
@@ -238,10 +239,10 @@ retransmitted. Earlier clean runs of the same fetch used 2,612 to 2,804.</p>
 <!-- ───────────── 5. all slow ───────────── -->
 <h2>5. Results: both links at 1,200 bit/s</h2>
 <p>With the reader's link slow too, the cache saves the backhaul leg but the reader still waits
-for its own link. This is also where the remaining failure showed up.</p>
+for its own link. An earlier run of this case timed out; section 7 explains why and what fixed it.</p>
 <figure>
   <figcaption>Seconds to fetch, both links slow</figcaption>
-  <p class="sub">Two readers per method. The cold 2 KB ICN fetch timed out.</p>
+  <p class="sub">Two readers per method. Every fetch completed.</p>
   <div id="timeSlow"></div>
   <details><summary>Table</summary><div id="timeSlowT"></div></details>
 </figure>
@@ -263,7 +264,7 @@ mid-transfer and the hub's route to the origin went with it.</p>
     <line x1="541" y1="26" x2="541" y2="70" stroke="var(--critical)" stroke-width="2"/>
     <text x="541" y="20" text-anchor="middle"><tspan style="fill:var(--critical);font-weight:700">✕</tspan> pool closes the link, 7 s into a 2 KB transfer</text>
     <rect x="496" y="64" width="110" height="8" rx="4" fill="var(--series-2)"/>
-    <text x="612" y="72" class="s">2 KB transfer (about 17 s)</text>
+    <text x="612" y="72" class="s">2 KB transfer</text>
 
     <text x="0" y="142" class="s">After</text>
     <rect x="70" y="128" width="810" height="20" rx="4" fill="var(--series-1)"/>
@@ -277,11 +278,20 @@ mid-transfer and the hub's route to the origin went with it.</p>
   </svg>
 </figure>
 
-<h2>7. What is still open</h2>
-<p>A cold fetch of a 2 KB item over slow links is not reliable yet: it timed out once with both
-links slow, after about three times the item's size had crossed the backhaul. The likely cause is
-large messages being resent because Reticulum's timers do not know the link is slow, possibly made
-worse by the benchmark relay offering an 8 KB packet size. That is not confirmed.</p>
+<h2>7. The slow-link timeout, fixed</h2>
+<p>A cold 2 KB fetch with both links at 1,200 bit/s used to time out after about three times the
+item's size had crossed the backhaul. Two things combined. The benchmark's TCP links let Reticulum
+negotiate a multi-kilobyte packet size, so the item went as a single packet that takes 15 seconds
+to cross. And the hub fetched upstream over the Channel, whose retry timer is set from the
+round-trip time of small packets: it fired mid-transfer and sent the whole item again, until the
+link gave up.</p>
+<p>The hub now uses the request binding upstream, which has no such timer, and the benchmark holds
+links to 500-byte packets. The same fetch completes in 25.0 seconds with 1,626 backhaul bytes and
+no repeated transfer.</p>
+<h2>8. What is still open</h2>
+<p>These are single runs on one machine over a simulated link, not radio measurements. The 2 KB
+"before" figure for reader-link bytes was not re-measured at the 500-byte packet size, so that
+chart shows only the current figure for that item.</p>
 </main>
 <div id="tip" role="status"></div>
 
@@ -363,26 +373,25 @@ worse by the benchmark relay offering an 8 KB packet size. That is not confirmed
   }));
 
   bars("timeFast", "timeFastT", [
-    { title: "200-byte item", rows: mk([5.5, 5.2, 0.6, 0.6]) },
-    { title: "2 KB item", rows: mk([17.7, 17.4, 0.6, 0.6]) },
+    { title: "200-byte item", rows: mk([5.7, 4.7, 0.6, 0.6]) },
+    { title: "2 KB item", rows: mk([11.1, 11.1, 0.6, 0.6]) },
   ], "s", "Seconds");
   bars("backFast", "backFastT", [
-    { title: "200-byte item", rows: mk([856, 815, 0, 187]) },
-    { title: "2 KB item", rows: mk([2614, 4988, 0, 0]) },
+    { title: "200-byte item", rows: mk([883, 608, 0, 185]) },
+    { title: "2 KB item", rows: mk([1698, 1651, 0, 0]) },
   ], "B", "Backhaul bytes");
   bars("timeSlow", "timeSlowT", [
-    { title: "200-byte item", rows: mk([11.2, 12.9, 8.3, 9.3]) },
-    { title: "2 KB item", rows: mk([36.0, null, 20.4, 20.4], { 1: "failed: timed out at 180 s" }) },
+    { title: "200-byte item", rows: mk([11.2, 12.3, 8.3, 9.6]) },
+    { title: "2 KB item", rows: mk([21.0, 25.0, 14.6, 14.6]) },
   ], "s", "Seconds");
   bars("edgeChart", "edgeTable", [
     { title: "200-byte item", rows: [
-      { name: "Page from origin", value: 1312, ctx: true },
+      { name: "Page from origin", value: 1336, ctx: true },
       { name: "ICN before", value: 1924, ctx: false, note: "over the Channel" },
       { name: "ICN after", value: 1432, ctx: false, note: "request and response" } ] },
     { title: "2 KB item", rows: [
-      { name: "Page from origin", value: 3069, ctx: true },
-      { name: "ICN before", value: 3718, ctx: false, note: "over the Channel" },
-      { name: "ICN after", value: 3234, ctx: false, note: "request and response" } ] },
+      { name: "Page from origin", value: 2152, ctx: true },
+      { name: "ICN after", value: 2472, ctx: false, note: "request and response" } ] },
   ], "B", "Reader-link bytes");
 
   // ── packet sequence diagrams ──
@@ -424,13 +433,13 @@ worse by the benchmark relay offering an 8 KB packet size. That is not confirmed
   // ── break-even line chart ──
   (function () {
     const svg = document.getElementById("breakeven");
-    const X0 = 56, X1 = 660, Y0 = 250, Y1 = 34, N = 6, YMAX = 24000;
+    const X0 = 56, X1 = 660, Y0 = 250, Y1 = 34, N = 6, YMAX = 18000;
     const x = n => X0 + (n - 1) / (N - 1) * (X1 - X0);
     const y = v => Y0 - v / YMAX * (Y0 - Y1);
     const series = [
-      { name: "Page from origin", color: "var(--series-1)", f: n => 3470 * n, dy: 4 },
-      { name: "ICN, cached on first request", color: "var(--series-2)", f: () => 5803, dy: -6 },
-      { name: "ICN, hub follows origin", color: "var(--series-3)", f: () => 4739, dy: 14 },
+      { name: "Page from origin", color: "var(--series-1)", f: n => 2581 * n, dy: 4 },
+      { name: "ICN, cached on first request", color: "var(--series-2)", f: () => 2259, dy: 16 },
+      { name: "ICN, hub follows origin", color: "var(--series-3)", f: () => 3780, dy: -8 },
     ];
     for (let v = 0; v <= YMAX; v += 6000) {
       svg.append(el("line", { x1: X0, y1: y(v), x2: X1, y2: y(v), stroke: v ? "var(--grid)" : "var(--axis)" }));

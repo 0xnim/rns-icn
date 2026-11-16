@@ -117,6 +117,12 @@ identity_path = "~/.icn/peer1_identity"
 # 0 = off) for content that is published without a push.
 follow_resync_interval = 0
 
+# Nodes that follow producers say so in their announce. With this on, an
+# Interest for a producer that has no configured route goes to the nearest node
+# announcing that it holds that producer's content. This links to nodes that are
+# not listed in known_peers.
+route_via_holders = false
+
 # NomadNet page front end: serve what this node holds as pages that existing
 # Reticulum clients (NomadNet, MeshChat, rBrowser, ...) can browse. The node
 # announces a "nomadnetwork.node" destination on the same identity.

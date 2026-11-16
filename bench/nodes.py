@@ -34,6 +34,9 @@ PAGE_APP = ("nomadnetwork", "node")
 # Announces cross the shaped links and would swamp a 1200 bit/s channel; keep
 # the periodic ones out of the measurement window.
 QUIET_ANNOUNCE = 3600.0
+# Reticulum would negotiate a multi-kilobyte MTU over TCP, which no slow link
+# has; hold packets to the radio-sized default so large Data goes as a Resource.
+LINK_MTU = int(os.environ.get("BENCH_MTU", "500"))
 
 
 def write_config(configdir: str, transport: bool, interfaces: list[str]) -> None:
@@ -58,6 +61,7 @@ def tcp_server(port: int) -> str:
     type = TCPServerInterface
     interface_enabled = yes
     ingress_control = false
+    fixed_mtu = {LINK_MTU}
     listen_ip = 127.0.0.1
     listen_port = {port}
 """
@@ -68,6 +72,7 @@ def tcp_client(port: int) -> str:
     type = TCPClientInterface
     interface_enabled = yes
     ingress_control = false
+    fixed_mtu = {LINK_MTU}
     target_host = 127.0.0.1
     target_port = {port}
 """

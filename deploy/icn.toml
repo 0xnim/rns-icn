@@ -23,6 +23,12 @@ cs_max_entries = 10000
 cs_ttl_seconds = 0                  # <= 0 means no TTL (infinite)
 cs_path = "/var/lib/rns-icn/content_store.db"
 
+# NomadNet page front end: anyone with NomadNet, MeshChat or Columba can browse
+# what this node holds by opening the "Pages" destination printed at start-up.
+pages_enabled = true
+pages_node_name = "ICN: idk.yachts"
+pages_announce_interval = 1800
+
 log_level = "INFO"
 log_json = true                     # structured logs for journald aggregation
 

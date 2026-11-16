@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import time
 from collections.abc import AsyncIterator, Callable
@@ -14,6 +15,7 @@ from . import access, discovery
 from .config import ClientConfig
 from .face import FaceId, LinkFace
 from .forwarder import Forwarder
+from .holders import HolderDirectory
 from .icn_logging import setup_logging
 from .link_pool import LinkPool
 from .manifest import Manifest, ManifestEntry
@@ -35,6 +37,24 @@ _RESOLVE_POLL_INTERVAL = 0.25
 _RESOLVE_REREQUEST_INTERVAL = 2.5
 
 
+def _hops_to(destination_hash: bytes) -> int | None:
+    try:
+        return RNS.Transport.hops_to(destination_hash)
+    except Exception:
+        return None
+
+
+class _HolderAnnounceHandler:
+    """Feeds ICN announces into a ``HolderDirectory`` (called on an RNS thread)."""
+
+    def __init__(self, aspect_filter: str, directory: HolderDirectory):
+        self.aspect_filter = aspect_filter
+        self._directory = directory
+
+    def received_announce(self, destination_hash, announced_identity, app_data) -> None:
+        self._directory.observe(destination_hash, announced_identity.hash, app_data)
+
+
 class ICNClient:
     """ICN Consumer client: expresses Interests, fetches Data over RNS mesh.
 
@@ -49,6 +69,9 @@ class ICNClient:
         self._link_pool: LinkPool | None = None
         self._forwarder: Forwarder | None = None
         self._face_counter = 1000
+        # Nodes heard announcing that they hold a producer's content.
+        self.holders = HolderDirectory(hops_to=_hops_to)
+        self._announce_handler: _HolderAnnounceHandler | None = None
         # name → highest authenticated (signed_at, sequence) accepted so far,
         # used for rollback detection when config.reject_rollback is set.
         self._seen_signed_key: dict[bytes, tuple[int, int]] = {}
@@ -103,6 +126,10 @@ class ICNClient:
         )
         await self._link_pool.start()
 
+        # Learn which nodes hold which producer's content from their announces.
+        self._announce_handler = _HolderAnnounceHandler("icn.default", self.holders)
+        RNS.Transport.register_announce_handler(self._announce_handler)
+
         self._load_capabilities()
 
         return self
@@ -131,6 +158,10 @@ class ICNClient:
         for face_id, task in pumps:
             if self._pump_tasks.get(face_id) is task:
                 self._pump_tasks.pop(face_id)
+        if self._announce_handler is not None:
+            with contextlib.suppress(Exception):
+                RNS.Transport.deregister_announce_handler(self._announce_handler)
+            self._announce_handler = None
         if self._link_pool:
             await self._link_pool.stop()
         if self._started_rns and RNS.Reticulum.get_instance() is not None:
@@ -151,6 +182,39 @@ class ICNClient:
         return await self._fetch_verified(
             name, peer_hash, timeout=timeout, max_retries=max_retries
         )
+
+    async def fetch_nearest(
+        self,
+        name: Name,
+        timeout: float | None = None,
+        max_holders: int = 3,
+    ) -> Data | None:
+        """Fetch ``name`` from the nearest node known to hold its producer's content.
+
+        Holders are learned from announces (``rns_icn.holders``): nodes that
+        follow the producer, and the producer itself. They are tried nearest
+        first, one attempt each. The result is verified exactly as in
+        ``fetch``, so a holder cannot substitute content.
+
+        Raises ``LookupError`` when no holder has been heard from yet.
+        """
+        holders = self.holders.holders_of(name.rns_addr)[:max_holders]
+        if not holders:
+            raise LookupError(f"no known holder for producer {name.rns_addr.hex()}")
+        last_error: Exception | None = None
+        for holder in holders:
+            try:
+                data = await self._fetch_verified(
+                    name, holder.destination_hash, timeout=timeout, max_retries=0
+                )
+            except Exception as e:
+                last_error = e
+                continue
+            if data is not None:
+                return data
+        if last_error is not None:
+            raise last_error
+        return None
 
     async def _fetch_verified(
         self,
