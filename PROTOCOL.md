@@ -153,8 +153,12 @@ arbitrary-length labels (typically UTF-8).
 
 ### 5.2 Self-certifying addressing
 
-The producer address is the **truncated BLAKE2b hash of the producer's RNS
-public key** (an RNS identity hash). The name therefore *is* the key: any party
+The producer address is the producer's **RNS identity hash**: the
+**truncated SHA-256 hash of the producer's RNS public key**
+(`SHA-256(public_key)[:16]`, matching RNS `Identity.hash`). This is the one
+address that is *not* BLAKE2b — it must equal the hash RNS itself derives, so an
+implementation using BLAKE2b here will fail to verify against real producers.
+The name therefore *is* the key: any party
 can confirm that a given public key is authoritative for a namespace by hashing
 it and comparing to the address — no PKI, no recall, fully offline. This
 property underpins signature verification ([§10.2](#102-data-signature-envelope))
@@ -442,9 +446,10 @@ Interest lifetime.
 ### 10.1 Content hashing
 
 `H(x) = BLAKE2b(x, digest_size=32)`. Used for content addressing
-([§8.2](#82-content-hash-verification)), chunk integrity
-([§16](#16-large-content)), and as the building block of the producer's identity
-hash (the producer address).
+([§8.2](#82-content-hash-verification)) and chunk integrity
+([§16](#16-large-content)). Note that the producer's identity hash (the producer
+address) is **not** derived with `H`: it is the RNS identity hash
+`SHA-256(public_key)[:16]` ([§5.2](#52-self-certifying-addressing)).
 
 ### 10.2 Data signature envelope
 
@@ -705,6 +710,13 @@ entry MAY still be served per strategy ([§13.3](#133-stale-while-revalidate))
 but never to a `must_be_fresh` Interest. Independently, the CS enforces a
 storage TTL (configurable, per-prefix overrides) and LRU eviction; these are
 local policy, not on-wire.
+
+For already-stale Data, the Python cache preserves incoming `age_seconds` and
+adds local residence time, saturating at the wire unsigned 64-bit maximum.
+This age uses the implementation's total-age convention for its revalidation
+window; another cache hop must not reset it. Fresh packets carry no age field,
+so their freshness period starts at local insertion. Neither the freshness flag
+nor this relay-maintained age proves the object's age since publication.
 
 ### 13.2 Rollback protection
 

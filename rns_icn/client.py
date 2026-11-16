@@ -96,6 +96,8 @@ class ICNClient:
             app_name="icn",
             aspect="default",
             known_peers=self.config.known_peers,
+            connect_timeout=self.config.connect_timeout,
+            path_request_timeout=self.config.path_request_timeout,
         )
         await self._link_pool.start()
 
@@ -119,9 +121,14 @@ class ICNClient:
 
     async def shutdown(self) -> None:
         """Gracefully stop link pool and RNS."""
-        for task in self._pump_tasks.values():
+        # Snapshot ownership: completion callbacks mutate the task map.
+        pumps = tuple(self._pump_tasks.items())
+        for _, task in pumps:
             task.cancel()
-        self._pump_tasks.clear()
+        await asyncio.gather(*(task for _, task in pumps), return_exceptions=True)
+        for face_id, task in pumps:
+            if self._pump_tasks.get(face_id) is task:
+                self._pump_tasks.pop(face_id)
         if self._link_pool:
             await self._link_pool.stop()
         if self._started_rns and RNS.Reticulum.get_instance() is not None:
@@ -216,6 +223,12 @@ class ICNClient:
                     )
                     if not sig_ok:
                         last_error = sig_err
+                        continue
+                    # Cache selection alone cannot enforce this against a
+                    # remote peer. Reject an explicitly stale reply before it
+                    # can advance the accepted signed-version watermark.
+                    if must_be_fresh and not result.metadata.freshness.fresh:
+                        last_error = ValueError("Data is stale but freshness is required")
                         continue
                     rb_ok, rb_err = self._check_rollback(result)
                     if not rb_ok:
@@ -601,9 +614,19 @@ class ICNClient:
 
         link_face = LinkFace(face_id, link, loop=loop, on_closed=_withdraw)
         forwarder.register_face(link_face)
-        self._pump_tasks[face_id] = asyncio.create_task(
-            self._pump_face(face_id, link_face)
-        )
+        task = asyncio.create_task(self._pump_face(face_id, link_face))
+        self._pump_tasks[face_id] = task
+
+        def completed(done: asyncio.Task) -> None:
+            # A previous pump may finish after its face slot was replaced.
+            if self._pump_tasks.get(face_id) is done:
+                self._pump_tasks.pop(face_id)
+            if not done.cancelled():
+                error = done.exception()
+                if error is not None:
+                    RNS.log(f"ICN client receive pump failed: {error}", RNS.LOG_ERROR)
+
+        task.add_done_callback(completed)
         return face_id
 
     async def _pump_face(self, face_id: FaceId, link_face: LinkFace) -> None:

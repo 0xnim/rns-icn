@@ -280,6 +280,26 @@ class TestResourceTransportIntegration(_ResourceIntegrationBase):
             assert f"chunk_{i}".encode() in received[i].content
 
 
+    @pytest.mark.asyncio
+    async def test_linkface_automatically_sends_oversized_data(self, shared_rns):
+        """Production LinkFace selects Resource without a sender monkeypatch."""
+        received: list[Data] = []
+        identity, dest = self._listening_destination("resource_linkface", received)
+        # Channel.mdu is capped at 65535 even on large-MTU TCP links.
+        content = os.urandom(70 * 1024)
+        self._spawn_peer(shared_rns.port, {
+            "app_name": APP_NAME,
+            "aspect": "resource_linkface",
+            "dest_hexhash": dest.hash.hex(),
+            "name_root_hex": identity.hash.hex(),
+            "mode": "linkface",
+            "items": [self._item(["automatic"], content)],
+        })
+        await self._receive(dest, received, 1)
+        assert received[0].name == Name(identity.hash, [b"automatic"])
+        assert received[0].content == content
+
+
 class TestLargeContentPublisherIntegration(_ResourceIntegrationBase):
     """LargeContentPublisher sending chunked content via Resource."""
 

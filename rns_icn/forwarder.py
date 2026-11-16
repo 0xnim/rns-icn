@@ -16,7 +16,7 @@ from .face import Face, FaceId
 from .fib import Fib
 from .name import Name
 from .packet import ChildSelector, Data, Interest, InterestSelector
-from .pit import Pit
+from .pit import Pit, PitOp
 from .strategy import BestRoute, Strategy, StrategyDecision
 
 logger = logging.getLogger(__name__)
@@ -46,6 +46,12 @@ class Forwarder:
         # this to surface pushed (unsolicited) content, which has no PIT entry and
         # is otherwise dropped here. Default None keeps the fetch path unchanged.
         self._data_callback: Callable[[Data], None] | None = None
+        # Data does not echo the Interest nonce. Keep overlapping match domains
+        # from being in flight together, otherwise replies to selectors such as
+        # LATEST and OLDEST cannot be correlated reliably. Unrelated namespaces
+        # remain concurrent.
+        self._interest_condition = asyncio.Condition()
+        self._active_interests: list[tuple[Name, bool]] = []
 
     def set_data_callback(self, callback: Callable[[Data], None] | None) -> None:
         """Register (or clear) an observer invoked for each Data in receive_data."""
@@ -77,6 +83,39 @@ class Forwarder:
 
     async def express(self, interest: Interest, in_face: FaceId) -> Data | None:
         """Express an Interest — main consumer API. Returns Data or None."""
+        reservation = (interest.name.without_content_hash(), interest.can_be_prefix)
+        async with self._interest_condition:
+            await self._interest_condition.wait_for(
+                lambda: not any(
+                    self._interest_domains_overlap(reservation, active)
+                    for active in self._active_interests
+                )
+            )
+            self._active_interests.append(reservation)
+        try:
+            return await self._express_reserved(interest, in_face)
+        finally:
+            async with self._interest_condition:
+                self._active_interests.remove(reservation)
+                self._interest_condition.notify_all()
+
+    @staticmethod
+    def _interest_domains_overlap(
+        left: tuple[Name, bool], right: tuple[Name, bool]
+    ) -> bool:
+        """Whether two Interests could be satisfied by the same Data name."""
+        a, a_prefix = left
+        b, b_prefix = right
+        if a_prefix and b_prefix:
+            return a.starts_with(b) or b.starts_with(a)
+        if a_prefix:
+            return b.starts_with(a)
+        if b_prefix:
+            return a.starts_with(b)
+        return a == b
+
+    async def _express_reserved(self, interest: Interest, in_face: FaceId) -> Data | None:
+        """Run one Interest after its match domain has been reserved."""
         # 1. Loop detection
         if self.pit.check_loop(in_face, interest.nonce):
             return None
@@ -130,14 +169,17 @@ class Forwarder:
             return cs_hit
 
         if decision == StrategyDecision.SUPPRESS_AGGREGATE:
-            fut = asyncio.get_event_loop().create_future()
-            self._pit_notifiers.setdefault(interest.name, []).append(fut)
+            name = interest.name.without_content_hash()
+            fut = asyncio.get_running_loop().create_future()
+            self._pit_notifiers.setdefault(name, []).append(fut)
             try:
                 result = await asyncio.wait_for(fut, timeout=interest.lifetime_ms / 1000.0)
+                # An aggregated waiter whose upstream NACKed gets nothing.
+                return None if result is _NACK else result
             except asyncio.TimeoutError:
                 return None
-            # An aggregated waiter whose upstream NACKed gets nothing.
-            return None if result is _NACK else result
+            finally:
+                self._remove_waiter(name, fut)
 
         if decision == StrategyDecision.FORWARD_TO:
             out_faces = self._failover_candidates(fib_faces, target_face)
@@ -192,52 +234,51 @@ class Forwarder:
         name = interest.name.without_content_hash() if interest.name.content_hash \
             else interest.name
 
-        self.pit.insert_or_aggregate(name, in_face, interest, interest.lifetime_ms)
-        self.pit.set_out_face(name, out_face_id)
-
         face = self._faces.get(out_face_id)
         if face is None:
-            self.pit.remove(name)
             return None
 
-        # Send Interest bytes out via the face, then wait on PIT notifier.
-        # This decouples Interest forwarding from express_interest() semantics
-        # (which not all face implementations support for server-to-server use).
-        # When Data arrives via receive_data(), the PIT entry matches and
-        # _notify_waiters resolves this future.
-        await face.send_raw(interest.to_bytes())
-
-        fut = asyncio.get_event_loop().create_future()
+        operation = self.pit.insert_or_aggregate(name, in_face, interest, interest.lifetime_ms)
+        entry = self.pit.find(name)
+        self.pit.set_out_face(name, out_face_id)
+        # Register before sending: an async transport may deliver Data or NACK
+        # before send_raw returns. Each caller owns only its own future.
+        fut = asyncio.get_running_loop().create_future()
         self._pit_notifiers.setdefault(name, []).append(fut)
         try:
-            result = await asyncio.wait_for(
-                fut, timeout=interest.lifetime_ms / 1000.0
-            )
-        except asyncio.TimeoutError:
-            self.pit.remove(name)
-            if isinstance(self.strategy, BestRoute):
-                self.strategy.record_failure(out_face_id)
-            return None
+            await face.send_raw(interest.to_bytes())
+            try:
+                result = await asyncio.wait_for(
+                    fut, timeout=interest.lifetime_ms / 1000.0)
+            except asyncio.TimeoutError:
+                if isinstance(self.strategy, BestRoute):
+                    self.strategy.record_failure(out_face_id)
+                return None
 
-        if result is _NACK:
-            # Upstream explicitly cannot satisfy this Interest — fail over to the
-            # next backup face *now* instead of waiting out the lifetime.
-            self.pit.remove(name)
-            if isinstance(self.strategy, BestRoute):
-                self.strategy.record_failure(out_face_id)
-            return None
-
-        if result is not None:
-            if isinstance(self.strategy, BestRoute):
+            if result is _NACK:
+                if isinstance(self.strategy, BestRoute):
+                    self.strategy.record_failure(out_face_id)
+                return None
+            if result is not None and isinstance(self.strategy, BestRoute):
                 self.strategy.record_success(out_face_id)
-            # No cs.insert here: this result was delivered by receive_data() (the
-            # only thing that resolves the PIT notifier), which already cached it.
-            # Re-inserting would be a redundant second SQLite write per fetch.
-            self.pit.remove(name)
+            # receive_data already cached this response. Avoid a second write.
             return result
+        finally:
+            self._remove_waiter(name, fut)
+            # Cancellation/send errors must not leave a ghost PIT entry that
+            # suppresses the next request. Expiry/eviction may have installed a
+            # replacement meanwhile; this caller must never delete that entry.
+            if operation is PitOp.INSERTED and self.pit.find(name) is entry:
+                self.pit.remove(name)
 
-        self.pit.remove(name)
-        return None
+    def _remove_waiter(self, name: Name, fut: asyncio.Future) -> None:
+        notifiers = self._pit_notifiers.get(name)
+        if notifiers is not None and fut in notifiers:
+            notifiers.remove(fut)
+            if not notifiers:
+                del self._pit_notifiers[name]
+        if not fut.done():
+            fut.cancel()
 
     def _schedule_revalidation(self, interest: Interest, in_face: FaceId,
                                out_face_id: FaceId) -> None:
@@ -289,6 +330,9 @@ class Forwarder:
         """
         if name.content_hash:
             name = name.without_content_hash()  # PIT state is keyed hash-free
+        entry = self.pit.find(name)
+        if entry is None or entry.out_face != in_face:
+            return
         notifiers = self._pit_notifiers.pop(name, [])
         for fut in notifiers:
             if not fut.done():
@@ -296,15 +340,17 @@ class Forwarder:
 
     async def receive_data(
         self, data: Data, in_face: FaceId, cache_unsolicited: bool = False
-    ) -> None:
-        """Receive incoming Data — satisfies PIT, caches in CS.
+    ) -> bool:
+        """Receive incoming Data; return False if its source conflicts with a PIT.
+
+        Accepted Data satisfies PIT entries and follows the cache policy below.
 
         PIT entries are keyed by the Interest name (which has no content hash).
         Strip any content hash from the Data name for PIT lookup so it
         matches the Interest's PIT entry regardless of content hash.
 
-        By default only Data that satisfies a pending Interest (a PIT match) is
-        cached — the standard NDN rule, so an unauthenticated peer cannot inject
+        By default only Data that satisfies a pending Interest from its selected
+        outbound face is cached — the standard NDN rule, so an unauthenticated peer cannot inject
         unsolicited content into the Content Store. Trusted push flows that
         legitimately deliver unsolicited content (propagation replication between
         peered servers) set ``cache_unsolicited=True`` to opt in. Cache poisoning
@@ -314,27 +360,37 @@ class Forwarder:
         # Strip content hash for PIT lookup (PIT entries are keyed by
         # interest name, which never carries a content hash)
         pit_name = data.name.without_content_hash() if data.name.content_hash else data.name
-        matched = self.pit.satisfy(pit_name)
+        matched = None
+        overlap = False
+        entry = self.pit.find(pit_name)
+        if entry is not None:
+            overlap = True
+            if entry.out_face == in_face:
+                matched = self.pit.satisfy(pit_name)
         if matched is None:
-            # A prefix Interest's PIT entry is keyed by the *prefix*, while
-            # the Data answering it carries a full (longer) name — match the
-            # nearest pending ancestor that asked with can_be_prefix, or
-            # every selector fetch (latest/oldest/sequence walk) times out
-            # despite its answer having arrived.
+            # Data can answer the nearest pending ancestor prefix, but only
+            # when it arrives from that Interest's selected outbound face.
             for i in range(pit_name.len() - 1, 0, -1):
                 candidate = Name(pit_name.rns_addr, list(pit_name.components[1:i]))
                 entry = self.pit.find(candidate)
                 if entry is not None and entry.interest.can_be_prefix:
-                    pit_name = candidate
-                    matched = self.pit.satisfy(candidate)
-                    break
+                    overlap = True
+                    if entry.out_face == in_face:
+                        pit_name = candidate
+                        matched = self.pit.satisfy(candidate)
+                        break
+        if overlap and matched is None:
+            # A rejected next hop cannot bypass source admission by claiming
+            # unsolicited/propagated Data. Unrelated trusted push is unchanged.
+            return False
         if matched is not None:
             self._notify_waiters(pit_name, data)
+            self.pit.remove(pit_name)
         if matched is not None or cache_unsolicited:
             self.cs.insert(data.name, data)
-        self.pit.remove(pit_name)
         if self._data_callback is not None:
             self._data_callback(data)
+        return True
 
     async def fetch_latest(
         self,

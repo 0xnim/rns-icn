@@ -223,12 +223,13 @@ async def test_stale_within_window_serves_stale_revalidate():
 
 
 @pytest.mark.asyncio
-async def test_stale_beyond_window_serves_from_cache():
+async def test_stale_beyond_window_forwards_before_serving():
     s = BestRoute(stale_while_revalidate=10)
     name = Name(rns_addr(0x01), [b"doc"])
     cs_hit = _stale_data(name, age=500, period=60)  # 500 > 60 + 10
-    decision, _ = await s.decide(Interest(name=name), [(9, 10)], None, cs_hit)
-    assert decision == StrategyDecision.SERVE_FROM_CACHE
+    decision, face = await s.decide(Interest(name=name), [(9, 10)], None, cs_hit)
+    assert decision == StrategyDecision.FORWARD_TO
+    assert face == 9
 
 
 @pytest.mark.asyncio

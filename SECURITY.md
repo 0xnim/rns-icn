@@ -1,8 +1,9 @@
 # Security Policy
 
 `rns-icn` is a security-focused reference implementation: it ships producer
-authentication, key rotation/revocation, and name-based access control. We take
-vulnerabilities in these mechanisms seriously.
+authentication and name-based access control. Producer identities are
+single-generation by design; key rotation/revocation is not part of the trust
+model. We take vulnerabilities in these mechanisms seriously.
 
 ## Reporting a vulnerability
 

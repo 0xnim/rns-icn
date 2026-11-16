@@ -11,7 +11,8 @@ Spec file (JSON):
   app_name, aspect     the parent's IN destination name
   dest_hexhash         the parent destination to link to (hex)
   name_root_hex        root (identity hash) for published Names (hex)
-  mode                 "data" — one ResourcePublisher.publish_data per item
+  mode                 "linkface" — production LinkFace.send_data per item
+                       "data" — one ResourcePublisher.publish_data per item
                        "chunked" — chunk item 0 and send every Data packet
                        plus its manifest via LargeContentPublisher
   items                [{"labels": [str, ...], "content_b64": str}, ...]
@@ -34,6 +35,7 @@ import sys
 import RNS
 
 from rns_icn.chunker import chunk_content
+from rns_icn.face import LinkFace
 from rns_icn.name import Name
 from rns_icn.packet import Data
 from rns_icn.resource_transport import LargeContentPublisher, ResourcePublisher
@@ -103,6 +105,12 @@ async def _publish(spec: dict, link: RNS.Link) -> None:
             data = Data.new(name=name, content=base64.b64decode(item["content_b64"]))
             if not await publisher.publish_data(data, timeout=PUBLISH_TIMEOUT):
                 _fail(f"publish_data failed for {name}")
+    elif spec["mode"] == "linkface":
+        face = LinkFace(1, link)
+        for item in spec["items"]:
+            name = Name(root, [label.encode() for label in item["labels"]])
+            data = Data.new(name=name, content=base64.b64decode(item["content_b64"]))
+            await face.send_data(data)
     elif spec["mode"] == "chunked":
         item = spec["items"][0]
         name = Name(root, [label.encode() for label in item["labels"]])

@@ -57,6 +57,8 @@ async def test_receive_nack_resolves_pending_notifier():
     name = Name(rns_addr(), [b"file"])
     fut = asyncio.get_event_loop().create_future()
     fw._pit_notifiers.setdefault(name, []).append(fut)
+    fw.pit.insert_or_aggregate(name, 100, Interest(name=name), 1000)
+    fw.pit.set_out_face(name, 5)
 
     fw.receive_nack(name, in_face=5)
 
@@ -216,6 +218,8 @@ async def test_handle_incoming_routes_nack_to_forwarder():
     name = Name(rns_addr(0xBB), [b"file"])
     fut = asyncio.get_event_loop().create_future()
     server.forwarder._pit_notifiers.setdefault(name, []).append(fut)
+    server.forwarder.pit.insert_or_aggregate(name, 100, Interest(name=name), 1000)
+    server.forwarder.pit.set_out_face(name, 7)
 
     await server.handle_incoming(7, Nack(name=name).to_bytes())
 

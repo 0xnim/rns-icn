@@ -39,9 +39,9 @@ jobs:
         run: mypy rns_icn
 
   integration:
-    # Real RNS over TCP loopback; non-blocking until proven stable in CI.
+    # Real RNS over TCP loopback is a release gate: transport regressions are
+    # protocol regressions, not advisory failures.
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 

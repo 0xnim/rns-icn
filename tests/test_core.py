@@ -402,6 +402,46 @@ class TestStrategy:
 
 class TestForwarder:
     @pytest.mark.asyncio
+    async def test_overlapping_interest_scopes_are_serialized(self):
+        """Selectors sharing a match domain cannot consume each other's Data."""
+        fw = Forwarder()
+        prefix = Name(rns_addr(0x01), [b"stream"])
+        first_entered = asyncio.Event()
+        release_first = asyncio.Event()
+        active = 0
+        max_active = 0
+
+        async def run_reserved(interest, _in_face):
+            nonlocal active, max_active
+            active += 1
+            max_active = max(max_active, active)
+            if interest.selector.child is ChildSelector.LATEST:
+                first_entered.set()
+                await release_first.wait()
+            active -= 1
+            return None
+
+        fw._express_reserved = run_reserved
+        latest = Interest(
+            name=prefix,
+            can_be_prefix=True,
+            selector=InterestSelector(child=ChildSelector.LATEST),
+        )
+        oldest = Interest(
+            name=prefix,
+            can_be_prefix=True,
+            selector=InterestSelector(child=ChildSelector.OLDEST),
+        )
+        first = asyncio.create_task(fw.express(latest, 0))
+        await first_entered.wait()
+        second = asyncio.create_task(fw.express(oldest, 0))
+        await asyncio.sleep(0)
+        assert max_active == 1
+        release_first.set()
+        await asyncio.gather(first, second)
+        assert max_active == 1
+
+    @pytest.mark.asyncio
     async def test_cs_hit(self):
         fw = Forwarder()
         name = Name(rns_addr(0x01), [b"test"])
@@ -447,6 +487,7 @@ class TestForwarder:
         name = Name(rns_addr(0x01), [b"test"])
         data = Data.new(name=name, content=b"hello")
         fw.pit.insert_or_aggregate(name, 1, Interest(name=name), 5000)
+        fw.pit.set_out_face(name, 2)
         await fw.receive_data(data, 2)
         cached = fw.cs.get(name)
         assert cached is not None

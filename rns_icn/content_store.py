@@ -178,6 +178,8 @@ class ContentStore:
         freshness = 1 if data.metadata.freshness.fresh else 0
         age_seconds = 0 if data.metadata.freshness.fresh else data.metadata.freshness.age_seconds
         freshness_period = data.metadata.freshness_period
+        stored_period = (min(freshness_period, (1 << 63) - 1)
+                         if freshness_period is not None else None)
         metadata_json = json.dumps({
             "content_hash": content_hash.hex(),
             "sequence": sequence,
@@ -195,6 +197,8 @@ class ContentStore:
 
         with self._conn:
             # Upsert content
+            # The canonical age in metadata_json retains the full wire uint64;
+            # this redundant SQLite INTEGER column is limited to signed int64.
             self._conn.execute("""
                 INSERT INTO content (name_hash, name_bytes, content_bytes, content_hash,
                                      sequence, freshness, age_seconds, freshness_period,
@@ -213,7 +217,7 @@ class ContentStore:
                     expires_at=excluded.expires_at,
                     size_bytes=excluded.size_bytes
             """, (name_hash, name_bytes, content_bytes, content_hash,
-                  sequence, freshness, age_seconds, freshness_period,
+                  sequence, freshness, min(age_seconds, (1 << 63) - 1), stored_period,
                   metadata_json, inserted_at, expires_at, size_bytes))
 
             # Update prefix index
@@ -248,13 +252,15 @@ class ContentStore:
             evicted += 1
         return evicted
 
-    def get(self, name: Name) -> Data | None:
+    def get(self, name: Name, *, revalidate: bool = False) -> Data | None:
         """Get Data by exact name match.
 
         A content-hash-pinned name (self-certifying fetch) matches the stored
         row for the unpinned name, and only when the pin equals the stored
         content's hash — a store can never answer a pinned request with
-        different bytes than the requester asked for.
+        different bytes than the requester asked for. An authoritative owner
+        may set revalidate to reaffirm a naturally aged, originally fresh row
+        in the returned copy only. Explicitly stale rows are never renewed.
         """
         self._purge_expired_internal()
 
@@ -284,7 +290,7 @@ class ContentStore:
             return None
 
         self._hits += 1
-        metadata = self._parse_metadata(metadata_json, inserted_at, freshness_period)
+        metadata = self._parse_metadata(metadata_json, inserted_at, freshness_period, revalidate=revalidate)
         signature = self._parse_signature(metadata_json)
         return Data(name=stored_name, content=content_bytes,
                     signature=signature, metadata=metadata)
@@ -294,6 +300,8 @@ class ContentStore:
         prefix: Name,
         child: ChildSelector = ChildSelector.NONE,
         min_sequence: int | None = None,
+        *,
+        revalidate: bool = False,
     ) -> Data | None:
         """Prefix match: find a stored name under this prefix.
 
@@ -348,7 +356,7 @@ class ContentStore:
             if child is not ChildSelector.NONE and _is_reserved_name(stored_name):
                 continue
             if self._verify_content(content_bytes, metadata_json):
-                metadata = self._parse_metadata(metadata_json, inserted_at, freshness_period)
+                metadata = self._parse_metadata(metadata_json, inserted_at, freshness_period, revalidate=revalidate)
                 signature = self._parse_signature(metadata_json)
                 self._hits += 1
                 return Data(name=stored_name, content=content_bytes,
@@ -375,27 +383,34 @@ class ContentStore:
         metadata_json: str,
         inserted_at: int | None = None,
         freshness_period: int | None = None,
+        *,
+        revalidate: bool = False,
     ) -> DataMetadata:
         """Reconstruct metadata, computing freshness dynamically from age.
 
-        Freshness is the producer's stored ``fresh`` flag AND, when a
+        Freshness is the stored ``fresh`` flag AND, when a
         ``freshness_period`` was declared, whether the entry has been held for
         less than that period. ``age_seconds`` always reflects the entry's real
-        age in the cache so callers (e.g. stale-while-revalidate) can reason
-        about how stale it is.
+        age plus incoming stale age so another cache hop cannot restart the
+        stale-while-revalidate window. This is relay accounting, not an
+        authenticated age since publication. Fresh wire packets carry no age.
         """
         meta = json.loads(metadata_json)
         stored_fresh = meta.get("fresh", True)
-        if freshness_period is None:
-            freshness_period = meta.get("freshness_period")
+        # JSON preserves unsigned wire values; the diagnostic SQL column is
+        # signed int64. Older rows may only have the column, so keep that
+        # fallback when the JSON key is absent (explicit null means no period).
+        freshness_period = meta.get("freshness_period", freshness_period)
 
-        if inserted_at is not None:
-            age = max(0, int(time.time()) - int(inserted_at))
-        else:
-            age = meta.get("age_seconds", 0)
+        incoming_age = 0 if stored_fresh else meta.get("age_seconds", 0)
+        residence = (max(0, int(time.time()) - int(inserted_at))
+                     if inserted_at is not None else 0)
+        age = min((1 << 64) - 1, incoming_age + residence)
 
         within_period = freshness_period is None or age < freshness_period
-        fresh = stored_fresh and within_period
+        fresh = stored_fresh and (revalidate or within_period)
+        if revalidate and fresh:
+            age = 0
         freshness = Freshness(fresh=fresh, age_seconds=age)
         return DataMetadata(
             content_hash=bytes.fromhex(meta["content_hash"]),

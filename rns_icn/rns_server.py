@@ -386,6 +386,13 @@ class ICNServer(BaseICNServer):
             RNS.log(f"ICN: Failed to establish link to {peer_hash}")
             return None
 
+        # LinkPool can share one Link among concurrent callers. Native Links
+        # have one callback owner: never install another face/listener/pump for
+        # the same object. No await separates this lookup from registration.
+        for existing in list(self._faces.values()):
+            if getattr(existing, "_link", None) is link:
+                return None if existing._closed else existing.id()
+
         face = self._new_face()
         self._make_link_face(face.id(), link)
 
@@ -404,8 +411,8 @@ class ICNServer(BaseICNServer):
         self._faces[face_id] = link_face
 
         # Wire resource listener for large chunks arriving via RNS.Resource
-        resource_listener = ResourceListener(link)
-        resource_listener.set_on_data(self._on_resource_data)
+        resource_listener = ResourceListener(link, max_data_size=16 * 1024 * 1024)
+        resource_listener.set_on_data(lambda data: self._on_resource_data(data, face_id))
 
         if self._loop is not None:
             asyncio.run_coroutine_threadsafe(
@@ -705,10 +712,32 @@ class ICNServer(BaseICNServer):
 
     # ── Resource transport ──
 
-    def _on_resource_data(self, data: Data) -> None:
-        """Called when a Data packet arrives via RNS.Resource."""
-        self.forwarder.cs.insert(data.name, data)
-        RNS.log(f"ICN: Received Data via Resource: {data.name} ({len(data.content)} bytes)")
+    def _on_resource_data(self, data: Data, face_id: FaceId) -> None:
+        """Queue ordinary Resource Data through the same path as Channel Data.
+
+        ResourceListener calls from the RNS thread. Copy the serialized packet
+        before scheduling; all face/PIT/cache operations belong to our event loop.
+        """
+        loop = self._loop
+        if loop is None or loop.is_closed():
+            return
+        raw = data.to_bytes()
+
+        def deliver() -> None:
+            if self._loop is not loop:
+                return  # shutdown or a replaced server loop
+            face = self._faces.get(face_id)
+            if face is None or face._closed:
+                return
+            # _process_link already owns this queue and calls handle_incoming,
+            # including PIT notification and the normal propagation policy.
+            face._recv_queue.put_nowait(raw)
+
+        try:
+            loop.call_soon_threadsafe(deliver)
+        except RuntimeError:
+            # A concurrent event-loop shutdown must not escape into RNS.
+            pass
 
     def create_resource_publisher(self, link: RNS.Link) -> ResourcePublisher:
         """Create a ResourcePublisher for sending large Data over a Link."""

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
+import math
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -140,11 +142,19 @@ class LinkFace(Face):
     windowing.
 
     Bridges from RNS's thread-based callback model into asyncio.
+    channel_send_timeout bounds Data/raw capacity waits; the default matches
+    the default four-second Interest lifetime and can be raised for slow links.
+    An expressed Interest always uses its own total lifetime instead.
     """
 
     def __init__(self, face_id: FaceId, link: RNS.Link, loop: asyncio.AbstractEventLoop | None = None,
-                 on_closed: Callable[[FaceId], None] | None = None):
-        from RNS.Channel import ChannelException, MessageBase
+                 on_closed: Callable[[FaceId], None] | None = None, *,
+                 channel_send_timeout: float = 4.0):
+        from RNS.Channel import CEType, ChannelException, MessageBase
+
+        if not math.isfinite(channel_send_timeout) or channel_send_timeout <= 0:
+            raise ValueError("channel_send_timeout must be finite and positive")
+        self._channel_send_timeout = channel_send_timeout
 
         class _ICNMessage(MessageBase):
             """Channel message wrapping raw ICN Interest/Data bytes."""
@@ -164,9 +174,11 @@ class LinkFace(Face):
         self._loop = loop or asyncio.get_running_loop()
         self._recv_queue: asyncio.Queue[bytes] = asyncio.Queue()
         self._closed = False
+        self._close_lock = threading.Lock()
         self._on_closed_hook = on_closed
         self._ICNMessage = _ICNMessage
         self._channel_exc = ChannelException
+        self._channel_not_ready = CEType.ME_LINK_NOT_READY
 
         # Get or create the Channel on this Link
         channel = link.get_channel()
@@ -188,53 +200,88 @@ class LinkFace(Face):
         # Handle link close. RNS allows a single closed-callback per Link, so
         # LinkFace owns it and fans out to an optional owner hook (used by the
         # server to withdraw this face's FIB routes — see ICNServer).
-        def _on_closed(link: RNS.Link) -> None:
-            if self._closed:
-                return
-            self._closed = True
-            self._loop.call_soon_threadsafe(
-                self._recv_queue.put_nowait, b""
-            )
+        def _on_closed(link: RNS.Link) -> bool:
+            with self._close_lock:
+                if self._closed:
+                    return False
+                self._closed = True
+            try:
+                self._loop.call_soon_threadsafe(
+                    self._recv_queue.put_nowait, b""
+                )
+            except RuntimeError:
+                logger.debug("LinkFace closed after event loop shutdown")
             if self._on_closed_hook is not None:
                 try:
                     self._on_closed_hook(self._id)
                 except Exception:
                     logger.debug("LinkFace on_closed hook failed", exc_info=True)
+            return True
 
+        self._notify_closed = _on_closed
         link.set_link_closed_callback(_on_closed)
 
-    def _send(self, raw: bytes) -> None:
-        """Send raw bytes over the Channel."""
-        try:
-            self._channel.send(self._ICNMessage(raw))
-        except self._channel_exc:
-            # Channel not ready (window full, link not ready) — silently drop
-            # The caller's timeout will handle it
-            pass
+    CHANNEL_READY_POLL = 0.01
+
+    async def _send(self, raw: bytes, timeout: float | None = None) -> None:
+        """Wait for Channel capacity, bounded by one deadline; never discard bytes."""
+        if timeout is None:
+            timeout = self._channel_send_timeout
+        deadline = self._loop.time() + timeout
+        message = self._ICNMessage(raw)
+        while True:
+            if self._closed:
+                raise ConnectionError("cannot send on a closed face")
+            remaining = deadline - self._loop.time()
+            if remaining <= 0:
+                raise asyncio.TimeoutError("Channel send capacity wait timed out")
+            try:
+                # Channel.send atomically tests/reserves its window. Readiness
+                # checks alone race with other callers and receipt callbacks.
+                self._channel.send(message)
+                return
+            except self._channel_exc as exc:
+                if exc.type != self._channel_not_ready:
+                    raise
+            # RNS has no public capacity-available callback. Yield to asyncio
+            # while its receipt thread opens the window; cancellation propagates.
+            await asyncio.sleep(min(self.CHANNEL_READY_POLL, remaining))
 
     async def express_interest(self, interest: Interest) -> Data | None:
-        raw = interest.to_bytes()
-        self._send(raw)
-
-        timeout_s = interest.lifetime_ms / 1000.0
+        deadline = self._loop.time() + interest.lifetime_ms / 1000.0
         try:
+            await self._send(interest.to_bytes(), timeout=deadline - self._loop.time())
             while True:
-                reply = await asyncio.wait_for(
-                    self._recv_queue.get(), timeout=timeout_s
-                )
+                remaining = deadline - self._loop.time()
+                if remaining <= 0:
+                    return None
+                reply = await asyncio.wait_for(self._recv_queue.get(), timeout=remaining)
                 if not reply:
                     return None  # link closed
                 if reply[0] == 0x02:  # Data type byte
                     return Data.from_bytes(reply)
-                # Ignore other packet types (e.g. Interests forwarded back)
+                # Other packet types do not restart the Interest lifetime.
         except asyncio.TimeoutError:
             return None
 
     async def send_data(self, data: Data) -> None:
-        self._send(data.to_bytes())
+        """Use a Resource when the serialized Data exceeds the Channel MDU."""
+        raw = data.to_bytes()
+        # Channel.mdu already subtracts the Channel envelope from Link.mdu.
+        # Compare the complete packet, including its ICN framing/signature.
+        if len(raw) <= self._channel.mdu:
+            await self._send(raw)
+            return
+
+        from .resource_transport import ResourcePublisher, ResourceTransportError
+
+        if self._closed:
+            raise ResourceTransportError("cannot send Data on a closed face")
+        if not await ResourcePublisher(self._link).publish_raw(raw):
+            raise ResourceTransportError("Data resource transfer did not complete")
 
     async def send_raw(self, raw: bytes) -> None:
-        self._send(raw)
+        await self._send(raw)
 
     def capabilities(self) -> FaceCapabilities:
         return FaceCapabilities(
@@ -251,7 +298,8 @@ class LinkFace(Face):
         return self._link
 
     def close(self) -> None:
-        self._closed = True
+        if not self._notify_closed(self._link):
+            return
         try:
             self._link.teardown()
         except Exception:

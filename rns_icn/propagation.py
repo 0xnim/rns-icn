@@ -376,9 +376,11 @@ class PropagationManager:
         # Cache locally AND resolve any pending PIT entries. Propagation push is
         # a trusted, authenticated peer flow, so unsolicited content is cached
         # intentionally (unlike the default generic incoming-Data path).
-        await self._server.forwarder.receive_data(
+        accepted = await self._server.forwarder.receive_data(
             data, in_face, cache_unsolicited=True
         )
+        if accepted is False:
+            return  # a mismatched next hop must not bypass admission via peers
 
         # Propagate to other peers
         await self.propagate(data, exclude_face=in_face)

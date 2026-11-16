@@ -19,6 +19,11 @@ def test_load_client_config():
 identity_path = "~/.icn/client_identity"
 mesh_interfaces = ["UTN Oregon"]
 fetch_timeout = 30.0
+connect_timeout = 12.5
+path_request_timeout = 4.5
+max_retries = 7
+base_retry_delay = 0.25
+max_retry_delay = 3.0
 
 [[client.known_peers]]
 name = "test-peer"
@@ -32,6 +37,11 @@ identity_path = "~/.icn/test_identity"
         assert cfg.identity_path is not None
         assert cfg.mesh_interfaces == ["UTN Oregon"]
         assert cfg.fetch_timeout == 30.0
+        assert cfg.connect_timeout == 12.5
+        assert cfg.path_request_timeout == 4.5
+        assert cfg.max_retries == 7
+        assert cfg.base_retry_delay == 0.25
+        assert cfg.max_retry_delay == 3.0
         assert len(cfg.known_peers) == 1
         assert cfg.known_peers[0].name == "test-peer"
         assert cfg.known_peers[0].destination_hash == "24cb54c7ec86294f0723e1d04015b8aa"

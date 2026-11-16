@@ -118,9 +118,19 @@ class ResourcePublisher:
         loop = self._get_or_init_loop()
         future: asyncio.Future[bool] = loop.create_future()
 
-        def on_conclude(res: RNS.Resource) -> None:
+        def settle(completed: bool) -> None:
+            # Both this check and the mutation run on the event loop. A late
+            # callback after timeout/cancellation must not touch a done Future.
             if not future.done():
-                loop.call_soon_threadsafe(future.set_result, True)
+                future.set_result(completed)
+
+        def on_conclude(res: RNS.Resource) -> None:
+            completed = res.status == RNS.Resource.COMPLETE
+            try:
+                loop.call_soon_threadsafe(settle, completed)
+            except RuntimeError:
+                # The owning event loop may already have closed at shutdown.
+                logger.debug("resource concluded after event loop closed")
 
         try:
             # Create the resource.  This starts the transfer in the RNS
@@ -135,10 +145,20 @@ class ResourcePublisher:
         except Exception as exc:
             raise ResourceTransportError(f"failed to create resource: {exc}") from exc
 
+        def cancel_transfer() -> None:
+            try:
+                _resource.cancel()
+            except Exception:
+                logger.debug("could not cancel resource transfer", exc_info=True)
+
         try:
             return await asyncio.wait_for(future, timeout=timeout)
         except asyncio.TimeoutError:
+            cancel_transfer()
             return False
+        except asyncio.CancelledError:
+            cancel_transfer()
+            raise
 
 
 # ── Receive side ──
@@ -156,7 +176,10 @@ class ResourceListener:
     are silently ignored.
     """
 
-    def __init__(self, link: RNS.Link):
+    def __init__(self, link: RNS.Link, max_data_size: int | None = None):
+        if max_data_size is not None and (type(max_data_size) is not int or max_data_size <= 0):
+            raise ValueError("max_data_size must be a positive integer")
+        self._max_data_size = max_data_size
         self._link = link
         self._on_data: Callable[[Data], None] | None = None
         self._on_raw: Callable[[bytes], None] | None = None
@@ -167,6 +190,24 @@ class ResourceListener:
         link.resource_strategy = RNS.Link.ACCEPT_APP
         link.callbacks.resource = self._accept_resource
         link.callbacks.resource_concluded = self._on_resource_concluded
+        if max_data_size is not None:
+            previous_started = link.callbacks.resource_started
+
+            def started(resource):
+                try:
+                    if previous_started is not None:
+                        previous_started(resource)
+                finally:
+                    # RNS calls this after part allocation, before decompression.
+                    # Request/response resources bypass ACCEPT_APP and are outside
+                    # this ordinary-resource policy.
+                    if (not (resource.flags & 0x18)
+                            and getattr(resource, "request_id", None) is None):
+                        resource.max_decompressed_size = min(
+                            max_data_size, resource.total_size)
+
+            link.callbacks.resource_started = started
+
 
     def set_on_data(self, callback: Callable[[Data], None]) -> None:
         """Register a callback that receives parsed ICN Data packets."""
@@ -180,9 +221,28 @@ class ResourceListener:
     # ── Private ──
 
     def _accept_resource(self, adv: RNS.ResourceAdvertisement) -> bool:
-        """Accept all resource advertisements — type filtering happens
-        in _on_resource_concluded after the data arrives."""
-        return True
+        """Bound ordinary resource declarations before RNS allocates part tables.
+
+        Configured limits are per resource, not a total heap or queue bound.
+        Native request/response resources bypass this callback entirely.
+        """
+        if self._max_data_size is None:
+            return True
+        try:
+            data_size, transfer_size, parts = adv.d, adv.t, adv.n
+            if any(type(value) is not int or value <= 0 for value in (data_size, transfer_size, parts)):
+                return False
+            if (data_size > self._max_data_size or transfer_size > self._max_data_size + 1024
+                    or parts > 65535 or adv.s or adv.i != 1 or adv.l != 1
+                    or adv.x or adv.u or adv.p or adv.q is not None):
+                return False
+            # Native RNS allocates ceil(transfer_size / SDU), irrespective of n.
+            mtu = getattr(self._link, "mtu", None)
+            sdu = (mtu - RNS.Reticulum.HEADER_MAXSIZE - RNS.Reticulum.IFAC_MIN_SIZE
+                   if mtu else (self._link.mdu or RNS.Resource.SDU))
+            return sdu > 0 and (transfer_size + sdu - 1) // sdu <= 65535
+        except (AttributeError, TypeError, ValueError):
+            return False
 
     def _on_resource_concluded(self, resource: RNS.Resource) -> None:
         """Called by RNS on the inbound thread when a resource transfer
@@ -192,7 +252,13 @@ class ResourceListener:
 
         try:
             resource.data.seek(0)
-            payload = resource.data.read()
+            if self._max_data_size is None:
+                payload = resource.data.read()
+            else:
+                payload = resource.data.read(self._max_data_size + 1)
+                if (len(payload) > self._max_data_size
+                        or len(payload) != resource.total_size):
+                    return
         except Exception:
             logger.debug("could not read completed resource payload", exc_info=True)
             return  # malformed — skip

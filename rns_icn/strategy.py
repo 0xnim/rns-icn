@@ -106,14 +106,18 @@ class BestRoute(Strategy):
     ) -> tuple[StrategyDecision, FaceId | None]:
 
         if cs_hit is not None and self._selector_satisfied(interest, cs_hit):
-            # Cache hit acceptable to the consumer. If it is stale-but-servable
-            # and we're inside the stale-while-revalidate window with a usable
-            # route, serve it now and refresh in the background.
-            if not cs_hit.metadata.freshness.fresh and self._within_swr_window(cs_hit):
+            if cs_hit.metadata.freshness.fresh or self._swr <= 0:
+                return StrategyDecision.SERVE_FROM_CACHE, None
+            # A configured SWR policy permits stale serving only inside its
+            # window. Beyond it, continue through aggregation/forwarding even
+            # without a usable route; do not silently fall back to old content.
+            # Forwarding preserves the caller's must_be_fresh flag: this is a
+            # local cache policy, not a guarantee of a fresh upstream response.
+            if self._within_swr_window(cs_hit):
                 face = self._first_usable_face(fib_faces)
                 if face is not None:
                     return StrategyDecision.SERVE_STALE_REVALIDATE, face
-            return StrategyDecision.SERVE_FROM_CACHE, None
+                return StrategyDecision.SERVE_FROM_CACHE, None
 
         if pit_hit is not None and not pit_hit.satisfied:
             return StrategyDecision.SUPPRESS_AGGREGATE, None

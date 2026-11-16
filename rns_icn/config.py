@@ -174,6 +174,9 @@ def _dict_to_client_config(data: dict[str, Any], base_path: str) -> ClientConfig
         connect_timeout=data.get("connect_timeout", 60.0),
         fetch_timeout=data.get("fetch_timeout", 30.0),
         path_request_timeout=data.get("path_request_timeout", 30.0),
+        max_retries=data.get("max_retries", 5),
+        base_retry_delay=data.get("base_retry_delay", 1.0),
+        max_retry_delay=data.get("max_retry_delay", 30.0),
         require_signature=data.get("require_signature", False),
         reject_rollback=data.get("reject_rollback", False),
         capabilities=[

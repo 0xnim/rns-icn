@@ -161,22 +161,20 @@ class ICNServer:
             hit is not None
             and interest.must_be_fresh
             and not hit.metadata.freshness.fresh
-            and interest.name.rns_addr != self.rns_addr
         ):
-            # must_be_fresh means "revalidate past stale caches": a cache
-            # declines so the Interest forwards toward the origin. The
-            # producer's own row is by definition the current version, so it
-            # serves regardless of the row's declared freshness period.
             return None
         return hit
 
     def _cs_lookup(self, interest: Interest) -> Data | None:
+        # Only the origin can reaffirm a naturally aged copy of its own edition.
+        revalidate = interest.must_be_fresh and interest.name.rns_addr == self.rns_addr
         if interest.can_be_prefix:
             sel = interest.selector
             hit = self._maybe_sign(self.forwarder.cs.get_prefix(
                 interest.name,
                 child=sel.child if sel else ChildSelector.NONE,
                 min_sequence=sel.min_sequence if sel else None,
+                revalidate=revalidate,
             ))
             if (
                 hit is not None
@@ -193,7 +191,7 @@ class ICNServer:
                 # forwarded toward the origin instead.
                 return None
             return hit
-        return self._maybe_sign(self.forwarder.cs.get(interest.name))
+        return self._maybe_sign(self.forwarder.cs.get(interest.name, revalidate=revalidate))
 
     async def _build_manifest_data(self, include_downstream: bool = True) -> Data:
         """Build a Data packet containing our content manifest.
