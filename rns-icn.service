@@ -9,6 +9,8 @@ Requires=rnsd.service
 Type=simple
 User=icn
 Group=icn
+# Start-up lines (destination and page addresses) are printed, not logged.
+Environment=PYTHONUNBUFFERED=1
 ExecStart=/opt/rns-icn/venv/bin/icn-server --config /etc/rns-icn/icn.toml
 Restart=always
 RestartSec=5
