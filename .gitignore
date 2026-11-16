@@ -13,3 +13,8 @@ build/
 .coverage.*
 htmlcov/
 .pytest_cache/
+
+# Reticulum identity files hold private keys; never commit them.
+server_identity
+*_identity
+identity
