@@ -38,7 +38,8 @@ def test_index_lists_producers_with_counts_and_nicknames(hub):
     page = PageRenderer(hub, node_name="Harbour hub", nicknames={WX: "weather"}).index()
     assert ">Harbour hub" in page
     assert f"weather ({WX.hex()[:12]})`:{PATH_PRODUCER}`p={WX.hex()}]  2 items" in page
-    assert "1 item," in page and "this node" in page
+    # The node's own content is listed first, directly on the home page.
+    assert page.index("[about`") < page.index(">Kept from other nodes") < page.index("weather")
 
 
 def test_producer_page_groups_by_label_newest_first(hub):
@@ -48,7 +49,19 @@ def test_producer_page_groups_by_label_newest_first(hub):
     page = PageRenderer(hub).producer(WX.hex())
     assert page.index(">>docs") < page.index(">>feed")
     assert page.index("[tue`") < page.index("[mon`")
-    assert f"`:{PATH_ITEM}`n={newest.name.to_bytes().hex()}]  #2  3 B" in page
+    assert f"`:{PATH_ITEM}`n={newest.name.to_bytes().hex()}]  latest  3 B" in page
+    assert "[mon`" in page and "mon`:" in page and "latest  3 B" not in page.split("[mon`")[1]
+
+
+def test_collections_list_a_few_editions_and_count_the_rest(hub):
+    for seq in range(1, 8):
+        put(hub, HUB, [b"swx", b"now", str(seq).encode()], b"{}", seq)
+    put(hub, HUB, [b"about.mu"], b">hi")
+    page = PageRenderer(hub, node_name="Harbour hub").index()
+    assert page.index("[about.mu`") < page.index(">>swx/now")
+    assert page.index("[7`") < page.index("[6`") < page.index("[4`")
+    assert "[3`" not in page and "3 earlier not listed" in page
+    assert "Kept from other nodes" not in page
 
 
 def test_producer_page_rejects_bad_address(hub):

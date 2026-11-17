@@ -1,6 +1,7 @@
 """Space weather feed: rendering and file handling, with canned NOAA data."""
 
 import importlib.util
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -61,39 +62,63 @@ def test_now_page_survives_missing_and_malformed_sources():
     assert "99 sfu" in page and "K index" not in page
 
 
-def test_render_builds_every_file_and_dates_the_forecast_from_its_header():
+def test_record_is_compact_json_with_the_documented_fields():
+    record = sw.build_record(DATA, NOW)
+    assert record == {
+        "v": 1, "t": 1794875400, "r": 1, "s": 0, "g": 0, "sfi": 123,
+        "kp": 4.67, "kp_t": 1794862800, "a": 30, "wind": 294, "bz": -5, "bt": 7,
+        "fc_d": "2026-11-17", "fc": [[25, 5, 5, 1]],
+    }
+    assert sw.build_record({}, NOW) is None
+    assert sw.build_record({"flux": [{"flux": "n/a"}], "kp": "nope"}, NOW) is None
+
+
+def test_report_time_is_the_newest_measurement():
+    assert sw.report_time(DATA, NOW) == 1794875400            # the scales stamp
+    later = dict(DATA, wind=[{"proton_speed": 300, "time_tag": "2026-11-17T00:58:00Z"}])
+    assert sw.report_time(later, NOW) == 1794877080
+    assert sw.report_time({}, NOW) == int(NOW.timestamp())    # NOW is on the hour
+
+
+def test_render_writes_one_edition_per_collection():
     files = sw.render(DATA, NOW)
     assert set(files) == {
-        "spaceweather/now.mu", "spaceweather/forecast.txt", "spaceweather/discussion.txt",
-        "spaceweather/forecast/2026-11-17.txt", "spaceweather/alerts.txt",
+        "swx/now/1794875400", "swx/page/1794875400.mu", "swx/fc/20261117-0030",
+        "swx/disc/20261117-0100", "swx/alert/20261116-0628-alert",
     }
-    assert files["spaceweather/forecast.txt"].endswith("A. Geomagnetic\n")
-    assert "\r" not in files["spaceweather/forecast.txt"]
-    alerts = files["spaceweather/alerts.txt"]
-    assert "ALERT: new" in alerts and "old" not in alerts and "undated" not in alerts
+    assert json.loads(files["swx/now/1794875400"])["sfi"] == 123
+    assert files["swx/now/1794875400"].count("\n") == 1
+    assert files["swx/fc/20261117-0030"].endswith("A. Geomagnetic\n")
+    assert "\r" not in files["swx/fc/20261117-0030"]
+    assert files["swx/alert/20261116-0628-alert"] == "ALERT: new\n"
 
 
-def test_alerts_file_says_when_there_are_none():
-    assert "No alerts" in sw.render_alerts([], NOW)
-    assert sw.render_alerts(None, NOW) is None
+def test_alert_names_use_the_message_code():
+    data = {"alerts": [{"issue_datetime": "2026-11-16 06:28:00.000",
+                        "message": "Space Weather Message Code: ALTEF3\r\nSerial Number: 1"}]}
+    assert list(sw.render(data, NOW)) == ["swx/alert/20261116-0628-ALTEF3"]
 
 
 def test_files_are_rewritten_only_when_changed_and_leave_no_temporaries(tmp_path):
     files = sw.render(DATA, NOW)
     assert sw.write_files(tmp_path, files) == 5
     assert sw.write_files(tmp_path, files) == 0
-    files["spaceweather/discussion.txt"] = "Changed\n"
+    files["swx/disc/20261117-0100"] = "Changed\n"
     assert sw.write_files(tmp_path, files) == 1
-    assert (tmp_path / "spaceweather" / "discussion.txt").read_text() == "Changed\n"
+    assert (tmp_path / "swx" / "disc" / "20261117-0100").read_text() == "Changed\n"
     assert not [p for p in tmp_path.rglob("*") if p.name.startswith(".")]
 
 
-def test_old_dated_forecasts_are_pruned(tmp_path):
-    folder = tmp_path / "spaceweather" / "forecast"
+def test_old_editions_are_pruned_per_collection(tmp_path):
+    folder = tmp_path / "swx" / "page"
     folder.mkdir(parents=True)
-    for day in ("2026-10-01", "2026-11-01", "2026-11-17"):
-        (folder / f"{day}.txt").write_text("x")
-    (folder / "notes.txt").write_text("x")
-    assert sw.prune(tmp_path, NOW) == 1
+    for stamp in (100, 200, 300, 400, 500):
+        (folder / f"{stamp}.mu").write_text("x")
+    (folder / ".600.mu.tmp").write_text("x")
+    other = tmp_path / "swx" / "now"
+    other.mkdir()
+    (other / "100").write_text("x")
+    assert sw.prune(tmp_path) == 2
     assert sorted(p.name for p in folder.iterdir()) == [
-        "2026-11-01.txt", "2026-11-17.txt", "notes.txt"]
+        ".600.mu.tmp", "300.mu", "400.mu", "500.mu"]
+    assert (other / "100").exists()

@@ -26,15 +26,20 @@ based on [Keep a Changelog](https://keepachangelog.com/).
   the nearest node heard holding that producer; a router with
   `route_via_holders = true` routes producers it has no configured route for
   the same way.
-- **Publish directory** (`rns_icn.publish_dir`, `publish_dir`): files under a
-  directory are published as this node's content and kept in step with it.
-- **Space weather feed** (`feeds/spaceweather.py`): writes NOAA SWPC conditions,
-  forecasts and alerts into a publish directory, with a systemd timer.
+- **Publish directory** (`rns_icn.publish_dir`, `publish_dir`): each file under
+  a directory is published as a signed, sequenced edition and pushed to
+  subscribers; a folder is a collection with a latest pointer.
+- **Space weather feed** (`feeds/spaceweather.py`): writes NOAA SWPC conditions
+  (a compact JSON record and a page), forecasts and alerts into a publish
+  directory as collections under `swx/`, with a systemd timer.
 - **Benchmark** (`bench/run.py`): ICN through a hub vs a NomadNet-style page
   fetch over rate-limited links between real Reticulum instances, with bytes
   per link and an optional per-packet trace.
 
 ### Changed
+
+- The page front end groups items by folder, marks the latest edition of each,
+  and opens on the node's own content before listing other producers.
 
 - A server uses the request binding on links it opens (upstream fetches), not
   only when serving. On a slow link the Channel's retransmission timer fired

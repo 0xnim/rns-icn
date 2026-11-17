@@ -45,6 +45,8 @@ PATH_ITEM = "/page/item.mu"
 
 # Largest item rendered inline; bigger ones are described, not dumped.
 MAX_INLINE_BYTES = 64 * 1024
+# Editions listed per collection on a listing page, newest first.
+MAX_EDITIONS_LISTED = 4
 
 Validator = Callable[[bytes, bytes], bool]
 
@@ -115,6 +117,8 @@ class PageRenderer:
     # ── helpers ──
 
     def _producer_title(self, addr: bytes) -> str:
+        if addr == self._server.rns_addr:
+            return self.node_name
         nick = self._nicknames.get(addr)
         short = addr.hex()[:12]
         return f"{nick} ({short})" if nick else addr.hex()
@@ -144,6 +148,45 @@ class PageRenderer:
 
     # ── pages ──
 
+    @staticmethod
+    def _newest_first(rows):
+        # By sequence where there is one, else by arrival.
+        return sorted(rows, key=lambda r: (r[1] is not None, r[1] or 0, r[2]), reverse=True)
+
+    def _collections(self, producer: bytes) -> str:
+        """A producer's items grouped by the folder they are in.
+
+        A folder is a collection of editions: the newest is listed first and
+        marked, with a few earlier ones after it.
+        """
+        groups: dict[str, list[tuple[Name, int | None, int, int]]] = {}
+        for row in self._items(producer):
+            folder = "/".join(
+                c.decode("utf-8", errors="replace") for c in row[0].components[1:-1]
+            )
+            groups.setdefault(folder, []).append(row)
+        now = time.time()
+        out: list[str] = []
+        # Loose items (no folder) first, then collections by name.
+        for folder in sorted(groups, key=lambda f: (f != "", f)):
+            rows = self._newest_first(groups[folder])
+            if folder:
+                count = len(rows)
+                out.append(f">>{_label(folder)}\n")
+                shown = rows[:MAX_EDITIONS_LISTED]
+            else:
+                shown = rows
+            for position, (name, _seq, inserted_at, size_b) in enumerate(shown):
+                leaf = name.components[-1].decode("utf-8", errors="replace")
+                mark = "latest  " if folder and position == 0 else ""
+                out.append(
+                    f"{_link(leaf, PATH_ITEM, n=name.to_bytes().hex())}"
+                    f"  {mark}{_size(size_b)}, {_age(now - inserted_at)} ago\n"
+                )
+            if folder and count > len(shown):
+                out.append(f"{count - len(shown)} earlier not listed\n")
+        return "".join(out)
+
     def index(self) -> str:
         producers: dict[bytes, list[int]] = {}
         for name, _seq, inserted_at, _size_b in self._server.forwarder.cs.listing():
@@ -159,18 +202,20 @@ class PageRenderer:
         if not producers:
             out.append("Nothing is cached on this node yet.\n")
             return "".join(out)
+        # What this node publishes itself is the reason most visitors came.
+        own = self._server.rns_addr
+        if own in producers:
+            out.append(self._collections(own))
+            del producers[own]
+        if not producers:
+            return "".join(out)
         following = self._server.follower.stats()
         now = time.time()
-        out.append(">>Producers\n")
+        out.append(">Kept from other nodes\n" if len(out) > 1 else ">>Producers\n")
         for addr, (count, newest) in sorted(
             producers.items(), key=lambda kv: kv[1][1], reverse=True
         ):
-            tags = []
-            if addr == self._server.rns_addr:
-                tags.append("this node")
-            if addr.hex() in following:
-                tags.append("followed")
-            tag = f" [{', '.join(tags)}]" if tags else ""
+            tag = " [followed]" if addr.hex() in following else ""
             out.append(
                 f"{_link(self._producer_title(addr), PATH_PRODUCER, p=addr.hex())}"
                 f"  {count} item{'s' if count != 1 else ''}, newest {_age(now - newest)} ago"
@@ -187,35 +232,10 @@ class PageRenderer:
         if len(addr) != RNS_ADDR_BYTES:
             return self._header(crumbs) + "Unknown producer.\n"
         crumbs += " / " + _label(self._producer_title(addr))
-        items = self._items(addr)
-        out = [self._header(crumbs)]
-        if not items:
-            out.append("No items from this producer are cached here.\n")
-            return "".join(out)
-
-        groups: dict[str, list[tuple[Name, int | None, int, int]]] = {}
-        for row in items:
-            groups.setdefault(row[0].components[1].decode("utf-8", errors="replace"),
-                              []).append(row)
-        now = time.time()
-        for label in sorted(groups):
-            out.append(f">>{_label(label)}\n")
-            # Newest first: by sequence where there is one, else by arrival.
-            rows = sorted(
-                groups[label],
-                key=lambda r: (r[1] is not None, r[1] or 0, r[2]),
-                reverse=True,
-            )
-            for name, seq, inserted_at, size_b in rows:
-                tail = "/".join(
-                    c.decode("utf-8", errors="replace") for c in name.components[2:]
-                ) or label
-                seq_text = f"#{seq}  " if seq is not None else ""
-                out.append(
-                    f"{_link(tail, PATH_ITEM, n=name.to_bytes().hex())}"
-                    f"  {seq_text}{_size(size_b)}, cached {_age(now - inserted_at)} ago\n"
-                )
-        return "".join(out)
+        listing = self._collections(addr)
+        if not listing:
+            return self._header(crumbs) + "No items from this producer are cached here.\n"
+        return self._header(crumbs) + listing
 
     def item(self, name_hex: str) -> str:
         home = _link("Home", PATH_INDEX)

@@ -123,10 +123,11 @@ follow_resync_interval = 0
 # not listed in known_peers.
 route_via_holders = false
 
-# Publish every file under a directory as /<this node>/<relative path>. Changed
-# files are re-published and removed files withdrawn, checked every
-# publish_dir_interval seconds. Hidden files, names starting with "_" and files
-# over 256 KB are skipped.
+# Publish every file under a directory as /<this node>/<relative path>: signed,
+# sequenced and pushed to subscribers. A folder is a collection; write each new
+# version as a new file in it rather than overwriting one. Removed files are
+# withdrawn. Checked every publish_dir_interval seconds. Hidden files, names
+# starting with "_" and files over 256 KB are skipped.
 # publish_dir = "~/.icn/publish"
 # publish_dir_interval = 30
 

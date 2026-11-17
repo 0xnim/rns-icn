@@ -127,7 +127,7 @@ def _start_publish_dir(server: ICNServer, config) -> asyncio.Task | None:
     async def _loop() -> None:
         while True:
             try:
-                published, withdrawn = publisher.scan()
+                published, withdrawn = await publisher.scan()
                 if published or withdrawn:
                     print(f"  publish_dir: {published} published, {withdrawn} withdrawn")
             except Exception as e:
