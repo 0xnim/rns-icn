@@ -1,10 +1,18 @@
 """Tests for the NomadNet page front end's rendering (no Reticulum needed)."""
 
+import json
+
 import pytest
 
 from rns_icn.name import RNS_ADDR_BYTES, Name
 from rns_icn.packet import Data
-from rns_icn.pages import PATH_ITEM, PATH_PRODUCER, PageRenderer
+from rns_icn.pages import (
+    PATH_ABOUT_ICN,
+    PATH_COLLECTION,
+    PATH_ITEM,
+    PATH_PRODUCER,
+    PageRenderer,
+)
 from rns_icn.server import ICNServer
 
 HUB = bytes([0xBB] + [0] * (RNS_ADDR_BYTES - 1))
@@ -42,26 +50,61 @@ def test_index_lists_producers_with_counts_and_nicknames(hub):
     assert page.index("[about`") < page.index(">Kept from other nodes") < page.index("weather")
 
 
-def test_producer_page_groups_by_label_newest_first(hub):
+def test_producer_page_lists_the_latest_edition_per_collection(hub):
     put(hub, WX, [b"feed", b"mon"], b"old", 1)
     newest = put(hub, WX, [b"feed", b"tue"], b"new", 2)
     put(hub, WX, [b"docs", b"readme"], b"hi")
     page = PageRenderer(hub).producer(WX.hex())
-    assert page.index(">>docs") < page.index(">>feed")
-    assert page.index("[tue`") < page.index("[mon`")
-    assert f"`:{PATH_ITEM}`n={newest.name.to_bytes().hex()}]  latest  3 B" in page
-    assert "[mon`" in page and "mon`:" in page and "latest  3 B" not in page.split("[mon`")[1]
+    assert page.index("[docs`") < page.index("[feed`")
+    assert f"[feed`:{PATH_ITEM}`n={newest.name.to_bytes().hex()}]  3 B, updated" in page
+    assert "mon" not in page.split("[feed`")[1].split("\n")[0].split("earlier")[0]
+    assert f"[1 earlier`:{PATH_COLLECTION}`p={WX.hex()}|c={b'feed'.hex()}]" in page
 
 
-def test_collections_list_a_few_editions_and_count_the_rest(hub):
+def test_archive_page_lists_every_edition_newest_first(hub):
     for seq in range(1, 8):
         put(hub, HUB, [b"swx", b"now", str(seq).encode()], b"{}", seq)
+    renderer = PageRenderer(hub, node_name="Harbour hub")
+    index = renderer.index()
+    assert "6 earlier" in index and "[7`" not in index
+    page = renderer.collection(HUB.hex(), b"swx/now".hex())
+    assert page.index("[7`") < page.index("[6`") < page.index("[1`")
+    assert "latest" in page.split("[7`")[1].split("\n")[0]
+    assert "Unknown collection" in renderer.collection("zz", "zz")
+    assert "Nothing from this collection" in renderer.collection(HUB.hex(), b"nope".hex())
+
+
+def test_site_file_titles_orders_and_hides_collections(hub):
+    put(hub, HUB, [b"swx", b"now", b"1"], b"{}", 1)
+    put(hub, HUB, [b"swx", b"fc", b"1"], b"fc", 1)
+    put(hub, HUB, [b"swx", b"page", b"1.mu"], b">x", 1)
     put(hub, HUB, [b"about.mu"], b">hi")
-    page = PageRenderer(hub, node_name="Harbour hub").index()
-    assert page.index("[about.mu`") < page.index(">>swx/now")
-    assert page.index("[7`") < page.index("[6`") < page.index("[4`")
-    assert "[3`" not in page and "3 earlier not listed" in page
-    assert "Kept from other nodes" not in page
+    put(hub, HUB, [b"site.json"], json.dumps({
+        "titles": {"swx/page": "Space weather now", "swx/fc": "3-day forecast",
+                   "about.mu": "About"},
+        "hidden": ["swx/now"],
+    }).encode())
+    page = PageRenderer(hub).index()
+    assert page.index("[About`") < page.index("[Space weather now`") < page.index("[3-day forecast`")
+    assert "swx/now" not in page and "site.json" not in page
+    item = put(hub, HUB, [b"swx", b"fc", b"2"], b"fc2", 2)
+    crumbs = PageRenderer(hub).item(item.name.to_bytes().hex()).split("\n")[1]
+    assert "[3-day forecast`:/page/collection.mu" in crumbs
+
+
+def test_broken_site_file_is_ignored(hub):
+    put(hub, HUB, [b"swx", b"fc", b"1"], b"fc", 1)
+    put(hub, HUB, [b"site.json"], b"{not json")
+    assert "[swx/fc`" in PageRenderer(hub).index()
+
+
+def test_every_page_has_the_footer(hub):
+    item = put(hub, HUB, [b"about.mu"], b">hi")
+    r = PageRenderer(hub)
+    for page in (r.index(), r.producer(HUB.hex()), r.item(item.name.to_bytes().hex()),
+                 r.about_icn(), r.collection(HUB.hex(), b"x".hex())):
+        assert f"[What is this?`:{PATH_ABOUT_ICN}]" in page
+        assert "rns-icn" in page.splitlines()[-1]
 
 
 def test_producer_page_rejects_bad_address(hub):
@@ -80,7 +123,7 @@ def test_item_page_shows_text_verbatim_with_provenance(hub):
 def test_item_page_passes_micron_pages_through(hub):
     item = put(hub, WX, [b"site", b"index.mu"], b">Welcome\nhello")
     page = PageRenderer(hub).item(item.name.to_bytes().hex())
-    assert page.endswith(">Welcome\nhello\n")
+    assert ">Welcome\nhello\n" in page and "`=" not in page
 
 
 def test_item_page_reports_signature_state(hub):

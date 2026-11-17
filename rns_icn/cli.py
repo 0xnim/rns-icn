@@ -156,7 +156,8 @@ def _start_pages(server: ICNServer, config) -> asyncio.Task | None:
             identity = RNS.Identity.from_file(peer.identity_path)
         if identity is not None:
             nicknames[identity.hash] = peer.name
-    node = PageNode(server, node_name=config.pages_node_name, nicknames=nicknames)
+    node = PageNode(server, node_name=config.pages_node_name, nicknames=nicknames,
+                    source=config.pages_source)
     print(f"  Pages: {node.hexhash} (NomadNet page node \"{config.pages_node_name}\")")
 
     async def _announce_loop() -> None:

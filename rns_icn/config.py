@@ -141,6 +141,8 @@ class ServerConfig:
     pages_enabled: bool = False
     pages_node_name: str = "ICN cache"
     pages_announce_interval: float = 1800.0
+    # Shown in the page footer as where to get the software.
+    pages_source: str | None = None
     log_level: str = "INFO"
     log_json: bool = False
     http_enabled: bool = False
@@ -291,6 +293,7 @@ def _dict_to_server_config(data: dict[str, Any], base_path: str) -> ServerConfig
         pages_enabled=bool(data.get("pages_enabled", False)),
         pages_node_name=str(data.get("pages_node_name", "ICN cache")),
         pages_announce_interval=float(data.get("pages_announce_interval", 1800.0)),
+        pages_source=data.get("pages_source"),
         log_level=data.get("log_level", "INFO"),
         log_json=data.get("log_json", False),
         http_enabled=data.get("http_enabled", False),

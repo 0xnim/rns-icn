@@ -23,6 +23,7 @@ binds it to a destination.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from collections.abc import Callable
@@ -42,11 +43,42 @@ ASPECT = "node"
 PATH_INDEX = "/page/index.mu"
 PATH_PRODUCER = "/page/producer.mu"
 PATH_ITEM = "/page/item.mu"
+PATH_COLLECTION = "/page/collection.mu"
+PATH_ABOUT_ICN = "/page/icn.mu"
+
+# Optional file a producer publishes at the top of its namespace to describe
+# its collections to people: {"titles": {"swx/page": "Space weather now"},
+# "hidden": ["swx/now"]}. Titled collections are listed first, in that order.
+SITE_FILE = b"site.json"
+
+DEFAULT_SOURCE = ("rns://b89759110f28ebd29b153c3455b37fc0/public/rns-icn"
+                  "  (mirror: github.com/0xnim/rns-icn)")
+
+ABOUT_ICN = """>What is this?
+
+This node serves content over `*ICN`* (information-centric networking) on
+Reticulum.
+
+Ordinary page nodes are asked for a page by address, so only that node can
+answer, and only while it is online. Here, each item has a name and is signed
+by whoever published it. Any ICN node that holds a copy can hand it out, and
+you can check the signature no matter who did.
+
+So a hub near you can keep copies of a feed published far away, serve them
+without crossing the slow links in between, and keep serving them while the
+publisher is offline. Each item page says whether its signature was verified
+and whether it came from this node's cache.
+
+>>Reading it from a program
+
+Every item is also available to ICN clients by name, as
+/<publisher>/<path>, and a folder can be followed to receive new items as they
+are published. See the rns-icn documentation.
+"""
 
 # Largest item rendered inline; bigger ones are described, not dumped.
 MAX_INLINE_BYTES = 64 * 1024
 # Editions listed per collection on a listing page, newest first.
-MAX_EDITIONS_LISTED = 4
 
 Validator = Callable[[bytes, bytes], bool]
 
@@ -113,6 +145,7 @@ class PageRenderer:
         self._validator_for = validator_for
         self._fetch = fetch
         self._nicknames = nicknames or {}
+        self.source = DEFAULT_SOURCE
 
     # ── helpers ──
 
@@ -125,11 +158,41 @@ class PageRenderer:
 
     def _items(self, producer: bytes) -> list[tuple[Name, int | None, int, int]]:
         manifest = Name(producer, [b"manifest"])
+        site = Name(producer, [SITE_FILE])
         return [
             row for row in self._server.forwarder.cs.listing(Name(producer))
-            if row[0] != manifest and not discovery.is_reserved(row[0])
+            if row[0] != manifest and row[0] != site and not discovery.is_reserved(row[0])
             and row[0].len() > 1
         ]
+
+    def _site(self, producer: bytes) -> tuple[dict[str, str], set[str]]:
+        """A producer's collection titles and hidden collections, from its
+        ``site.json`` if this node holds one."""
+        data = self._server.forwarder.cs.get(Name(producer, [SITE_FILE]))
+        if data is None:
+            return {}, set()
+        try:
+            site = json.loads(data.content.decode("utf-8"))
+            titles = {str(k).strip("/"): str(v) for k, v in dict(site.get("titles", {})).items()}
+            hidden = {str(h).strip("/") for h in list(site.get("hidden", []))}
+        except Exception:
+            return {}, set()
+        return titles, hidden
+
+    def _groups(self, producer: bytes) -> dict[str, list[tuple[Name, int | None, int, int]]]:
+        groups: dict[str, list[tuple[Name, int | None, int, int]]] = {}
+        for row in self._items(producer):
+            folder = "/".join(
+                c.decode("utf-8", errors="replace") for c in row[0].components[1:-1]
+            )
+            groups.setdefault(folder, []).append(row)
+        return groups
+
+    def _footer(self) -> str:
+        return (
+            f"\n-\n{_link('What is this?', PATH_ABOUT_ICN)}"
+            f"   Runs rns-icn: {_label(self.source)}\n"
+        )
 
     def _signature_line(self, data: Data) -> str:
         if data.name.rns_addr == self._server.rns_addr:
@@ -156,36 +219,76 @@ class PageRenderer:
     def _collections(self, producer: bytes) -> str:
         """A producer's items grouped by the folder they are in.
 
-        A folder is a collection of editions: the newest is listed first and
-        marked, with a few earlier ones after it.
+        A folder is a collection of editions. Only the newest is listed, with a
+        link to the rest. The producer's ``site.json`` can title collections
+        (titled ones come first, in its order) and hide ones meant for programs.
         """
-        groups: dict[str, list[tuple[Name, int | None, int, int]]] = {}
-        for row in self._items(producer):
-            folder = "/".join(
-                c.decode("utf-8", errors="replace") for c in row[0].components[1:-1]
-            )
-            groups.setdefault(folder, []).append(row)
+        groups = self._groups(producer)
+        titles, hidden = self._site(producer)
         now = time.time()
         out: list[str] = []
-        # Loose items (no folder) first, then collections by name.
-        for folder in sorted(groups, key=lambda f: (f != "", f)):
+        order = list(titles)
+
+        def rank(folder: str) -> tuple:
+            if folder == "":
+                return (0, 0, "")
+            if folder in titles:
+                return (1, order.index(folder), folder)
+            return (2, 0, folder)
+
+        for folder in sorted(groups, key=rank):
+            if folder in hidden:
+                continue
             rows = self._newest_first(groups[folder])
-            if folder:
-                count = len(rows)
-                out.append(f">>{_label(folder)}\n")
-                shown = rows[:MAX_EDITIONS_LISTED]
-            else:
-                shown = rows
-            for position, (name, _seq, inserted_at, size_b) in enumerate(shown):
-                leaf = name.components[-1].decode("utf-8", errors="replace")
-                mark = "latest  " if folder and position == 0 else ""
-                out.append(
-                    f"{_link(leaf, PATH_ITEM, n=name.to_bytes().hex())}"
-                    f"  {mark}{_size(size_b)}, {_age(now - inserted_at)} ago\n"
+            if not folder:
+                for name, _seq, inserted_at, size_b in rows:
+                    leaf = titles.get(_path_text(name)) or _path_text(name)
+                    out.append(
+                        f"{_link(leaf, PATH_ITEM, n=name.to_bytes().hex())}"
+                        f"  {_size(size_b)}, {_age(now - inserted_at)} ago\n"
+                    )
+                continue
+            name, _seq, inserted_at, size_b = rows[0]
+            title = titles.get(folder, folder)
+            line = (f"{_link(title, PATH_ITEM, n=name.to_bytes().hex())}"
+                    f"  {_size(size_b)}, updated {_age(now - inserted_at)} ago")
+            if len(rows) > 1:
+                line += "   " + _link(
+                    f"{len(rows) - 1} earlier", PATH_COLLECTION,
+                    p=producer.hex(), c=folder.encode("utf-8").hex(),
                 )
-            if folder and count > len(shown):
-                out.append(f"{count - len(shown)} earlier not listed\n")
+            out.append(line + "\n")
         return "".join(out)
+
+    def collection(self, producer_hex: str, folder_hex: str) -> str:
+        """Every edition of one collection held here, newest first."""
+        home = _link("Home", PATH_INDEX)
+        try:
+            producer = bytes.fromhex(producer_hex)
+            folder = bytes.fromhex(folder_hex).decode("utf-8")
+        except (ValueError, UnicodeDecodeError):
+            return self._header(home) + "Unknown collection.\n" + self._footer()
+        rows = self._groups(producer).get(folder) if len(producer) == RNS_ADDR_BYTES else None
+        titles, _ = self._site(producer)
+        title = titles.get(folder, folder)
+        crumbs = (f"{home} / "
+                  f"{_link(self._producer_title(producer), PATH_PRODUCER, p=producer.hex())}"
+                  f" / {_label(title)}")
+        out = [self._header(crumbs)]
+        if not rows:
+            out.append("Nothing from this collection is held here.\n")
+            return "".join(out) + self._footer()
+        now = time.time()
+        out.append(f">>{_label(title)}\n")
+        for position, (name, _seq, inserted_at, size_b) in enumerate(self._newest_first(rows)):
+            leaf = name.components[-1].decode("utf-8", errors="replace")
+            mark = "latest  " if position == 0 else ""
+            out.append(f"{_link(leaf, PATH_ITEM, n=name.to_bytes().hex())}"
+                       f"  {mark}{_size(size_b)}, {_age(now - inserted_at)} ago\n")
+        return "".join(out) + self._footer()
+
+    def about_icn(self) -> str:
+        return self._header(_link("Home", PATH_INDEX)) + ABOUT_ICN + self._footer()
 
     def index(self) -> str:
         producers: dict[bytes, list[int]] = {}
@@ -201,14 +304,14 @@ class PageRenderer:
         out = [self._header(_link("Home", PATH_INDEX))]
         if not producers:
             out.append("Nothing is cached on this node yet.\n")
-            return "".join(out)
+            return "".join(out) + self._footer()
         # What this node publishes itself is the reason most visitors came.
         own = self._server.rns_addr
         if own in producers:
             out.append(self._collections(own))
             del producers[own]
         if not producers:
-            return "".join(out)
+            return "".join(out) + self._footer()
         following = self._server.follower.stats()
         now = time.time()
         out.append(">Kept from other nodes\n" if len(out) > 1 else ">>Producers\n")
@@ -221,7 +324,7 @@ class PageRenderer:
                 f"  {count} item{'s' if count != 1 else ''}, newest {_age(now - newest)} ago"
                 f"{_label(tag)}\n"
             )
-        return "".join(out)
+        return "".join(out) + self._footer()
 
     def producer(self, producer_hex: str) -> str:
         try:
@@ -234,8 +337,9 @@ class PageRenderer:
         crumbs += " / " + _label(self._producer_title(addr))
         listing = self._collections(addr)
         if not listing:
-            return self._header(crumbs) + "No items from this producer are cached here.\n"
-        return self._header(crumbs) + listing
+            return (self._header(crumbs) + "No items from this producer are cached here.\n"
+                    + self._footer())
+        return self._header(crumbs) + listing + self._footer()
 
     def item(self, name_hex: str) -> str:
         home = _link("Home", PATH_INDEX)
@@ -243,11 +347,18 @@ class PageRenderer:
             name = Name.from_bytes(bytes.fromhex(name_hex)).without_content_hash()
         except Exception:
             return self._header(home) + "Malformed item name.\n"
+        folder = "/".join(c.decode("utf-8", errors="replace") for c in name.components[1:-1])
+        titles, _ = self._site(name.rns_addr)
         crumbs = (
             f"{home} / "
             f"{_link(self._producer_title(name.rns_addr), PATH_PRODUCER, p=name.rns_addr.hex())}"
-            f" / {_label(_path_text(name))}"
         )
+        if folder:
+            crumbs += " / " + _link(titles.get(folder, folder), PATH_COLLECTION,
+                                    p=name.rns_addr.hex(), c=folder.encode("utf-8").hex())
+            crumbs += " / " + _label(name.components[-1].decode("utf-8", errors="replace"))
+        else:
+            crumbs += " / " + _label(titles.get(_path_text(name), _path_text(name)))
         out = [self._header(crumbs)]
 
         cs = self._server.forwarder.cs
@@ -258,7 +369,7 @@ class PageRenderer:
             source = "fetched from upstream just now"
         if data is None:
             out.append("This item is not cached here and could not be fetched.\n")
-            return "".join(out)
+            return "".join(out) + self._footer()
 
         details = [self._signature_line(data), source]
         if data.metadata.sequence is not None:
@@ -283,7 +394,7 @@ class PageRenderer:
                 # is shown verbatim.
                 is_micron = name.components[-1].endswith(b".mu")
                 out.append(text + "\n" if is_micron else _literal(text))
-        return "".join(out)
+        return "".join(out) + self._footer()
 
 
 class PageNode:
@@ -291,7 +402,8 @@ class PageNode:
 
     def __init__(self, server, node_name: str = "ICN cache",
                  fetch_lifetime_ms: int = 15_000,
-                 nicknames: dict[bytes, str] | None = None):
+                 nicknames: dict[bytes, str] | None = None,
+                 source: str | None = None):
         """``server`` is a started ``rns_icn.rns_server.ICNServer``."""
         import RNS
 
@@ -303,6 +415,8 @@ class PageNode:
             server, node_name=node_name, validator_for=_producer_validator,
             fetch=self._fetch_blocking, nicknames=nicknames,
         )
+        if source:
+            self.renderer.source = source
         self.destination = RNS.Destination(
             server.identity, RNS.Destination.IN, RNS.Destination.SINGLE, APP_NAME, ASPECT
         )
@@ -311,6 +425,8 @@ class PageNode:
             (PATH_INDEX, self._serve_index),
             (PATH_PRODUCER, self._serve_producer),
             (PATH_ITEM, self._serve_item),
+            (PATH_COLLECTION, self._serve_collection),
+            (PATH_ABOUT_ICN, self._serve_about_icn),
         ):
             self.destination.register_request_handler(
                 path, response_generator=handler, allow=RNS.Destination.ALLOW_ALL
@@ -349,6 +465,13 @@ class PageNode:
 
     def _serve_item(self, path, data, request_id, link_id, remote_identity, requested_at):
         return self._guard(lambda: self.renderer.item(self._field(data, "n")))
+
+    def _serve_collection(self, path, data, request_id, link_id, remote_identity, requested_at):
+        return self._guard(lambda: self.renderer.collection(
+            self._field(data, "p"), self._field(data, "c")))
+
+    def _serve_about_icn(self, path, data, request_id, link_id, remote_identity, requested_at):
+        return self._guard(self.renderer.about_icn)
 
     def _fetch_blocking(self, name: Name) -> Data | None:
         """Ask upstream for an item not held locally; blocks the request thread."""

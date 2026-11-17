@@ -22,6 +22,25 @@ A program reads the current conditions by asking for the latest item under
 `/<node>/swx/now`, or subscribes to that prefix to be sent each new one.
 It uses only the standard library.
 
+To give the collections readable names on the node's pages, and keep the JSON
+record off them, put a `site.json` at the top of the publish directory:
+
+```json
+{
+  "titles": {
+    "swx/page": "Space weather now",
+    "swx/fc": "3-day forecast",
+    "swx/disc": "Forecast discussion",
+    "swx/alert": "Alerts and warnings",
+    "about.mu": "About this node"
+  },
+  "hidden": ["swx/now"]
+}
+```
+
+Titled collections are listed first, in this order. Hidden ones are still
+published and readable by programs; they are only left off the pages.
+
 ```
 python3 feeds/spaceweather.py /var/lib/rns-icn/publish
 ```

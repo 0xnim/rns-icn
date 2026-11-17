@@ -135,6 +135,10 @@ route_via_holders = false
 pages_enabled = false
 pages_node_name = "ICN cache"
 pages_announce_interval = 1800
+# Where the page footer says to get the software (default: the rns-icn repo).
+# pages_source = "..."
+# A "site.json" at the top of publish_dir titles and hides collections on the
+# pages; see feeds/README.md.
 
 # Logging
 log_level = "INFO"

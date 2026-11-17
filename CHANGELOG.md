@@ -42,6 +42,11 @@ based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- Pages list only the latest edition of each collection, with a link to an
+  archive page of the rest. A producer's optional `site.json` titles, orders
+  and hides collections. Every page ends with a "What is this?" link and where
+  to get rns-icn.
+
 - A router retries links to known peers that are down, backing off from 15
   seconds to 10 minutes, instead of waiting to hear the peer announce.
 - Config paths beginning with `~` resolve to the home directory; they were
