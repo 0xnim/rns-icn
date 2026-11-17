@@ -52,11 +52,11 @@ async def test_browser_reads_cached_content_as_pages(shared_rns, tmp_path):
         pages = json.loads(line[len("PAGES "):])
 
         assert "error" not in pages, pages
-        assert ">Test hub" in pages["index"] and "2 items" in pages["index"]
-        # Newest edition first on the producer page.
-        producer = pages["producer"]
-        assert producer.index("[tuesday`") < producer.index("[monday`")
-        # The first item link is the newest edition; its text and provenance show.
+        # The node's own collection is listed on the index by its latest edition.
+        assert ">Test hub" in pages["index"] and "[feed`" in pages["index"]
+        assert "1 earlier" in pages["index"]
+        assert "[feed`" in pages["producer"] and "1 earlier" in pages["producer"]
+        # The linked item is the newest edition; its text and provenance show.
         assert "Rain clearing" in pages["item"]
         assert "#2" in pages["item"] and "this node's cache" in pages["item"]
     finally:

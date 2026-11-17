@@ -127,7 +127,7 @@ def test_accepts_and_bounds_native_packed_advertisements():
     resource = SimpleNamespace(size=550, total_size=500, parts=[None] * 6,
         hash=bytes(32), random_hash=bytes(4), original_hash=bytes(32),
         hashmap=bytes(6 * RNS.Resource.MAPHASH_LEN), compressed=True, encrypted=True,
-        split=False, has_metadata=False, segment_index=1, total_segments=1, request_id=None)
+        app_flag=False, split=False, has_metadata=False, segment_index=1, total_segments=1, request_id=None)
     native = RNS.ResourceAdvertisement(resource)
     parsed = RNS.ResourceAdvertisement.unpack(native.pack())
     assert receiver._accept_resource(parsed)

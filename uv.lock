@@ -1157,15 +1157,15 @@ wheels = [
 
 [[package]]
 name = "rns"
-version = "1.3.7"
+version = "1.6.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cryptography" },
     { name = "pyserial" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/8c/ed/2ace4e81951487975f38a16d8b4ee0154dc47b9cb746657b555adc1d7117/rns-1.3.7.tar.gz", hash = "sha256:6757db65c0af212b386b7e44b95eda4e36d6b11cae834258bc6d2d11dac6e125", size = 516648 }
+sdist = { url = "https://files.pythonhosted.org/packages/d0/21/c7d27dba5ff43a24d806678497c7f85273ccd23cd43cc9fc9cefb2ab3b30/rns-1.6.0.tar.gz", hash = "sha256:aa99d550dacd0c895d81cac6d0740fbd8e89bdb3d452c555a51ef2305a6e5e4d", size = 595494 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/32/3a/d67f42fe877427f3c88a744c39ba32f67fdc48328d3a0d98d1938ed452f8/rns-1.3.7-py3-none-any.whl", hash = "sha256:95d3bab98513e7f4318ea2dc0b743a21ce9e3c94caee2eb587203ca4b61fd9ed", size = 603491 },
+    { url = "https://files.pythonhosted.org/packages/a1/8e/f86238eb7c6b995b5ca6b19105c985c581f494f4a806ad74eb5a2b294d44/rns-1.6.0-py3-none-any.whl", hash = "sha256:fcf2d07eebafea7e56a94542bd74646e451b0f33bb3efb5f914bbbba38b39f36", size = 681475 },
 ]
 
 [[package]]

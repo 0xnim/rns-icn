@@ -221,7 +221,15 @@ class Forwarder:
         interest.hop_limit -= 1
 
         for out_face_id in out_faces:
-            result = await self._forward_one(interest, in_face, out_face_id)
+            try:
+                result = await self._forward_one(interest, in_face, out_face_id)
+            except Exception as e:
+                # A next hop whose link died cannot take the Interest; that is
+                # a failure of this hop, not of the Interest, so try the next.
+                logger.info("forward: face %s failed to send: %s", out_face_id, e)
+                if isinstance(self.strategy, BestRoute):
+                    self.strategy.record_failure(out_face_id)
+                continue
             if result is not None:
                 return result
         return None

@@ -2,8 +2,8 @@
 
 Does what a NomadNet-compatible browser does: resolve a path to the node
 destination, open a Link, and request pages. Prints one ``PAGES <json>`` line
-with the index page, the first producer page linked from it, and the first item
-page linked from that.
+with the index page, the first item page linked from it, and the producer page
+linked from that item's breadcrumb.
 
 Not a test module. Invoked as::
 
@@ -77,9 +77,10 @@ def main() -> None:
         return value.decode("utf-8") if isinstance(value, bytes) else value
 
     result: dict = {"index": request("/page/index.mu")}
-    for key in ("producer", "item"):
-        previous = result["index"] if key == "producer" else result["producer"]
-        # Skip the breadcrumb links back to earlier pages.
+    # The index lists the node's own items directly; the item page's
+    # breadcrumb leads to the producer page.
+    for key in ("item", "producer"):
+        previous = result["index"] if key == "item" else result["item"]
         for match in LINK.finditer(previous or ""):
             if match.group(1) == f"/page/{key}.mu":
                 break

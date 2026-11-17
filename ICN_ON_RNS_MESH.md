@@ -1,5 +1,13 @@
 # ICN on RNS Mesh — Protocol Design & Production Notes
 
+> **Historical.** This describes the first deployment, on a VPS that no longer
+> exists; its IP address may now belong to someone else, so do not connect to
+> it. Copying a server's identity file to clients (below) is no longer needed
+> or wanted: an identity file holds the private key, and a peer's public
+> identity is now learned from its announce, or fetched as a self-certifying
+> key record (PROTOCOL.md §14.2). For the current setup see `deploy/` and
+> `feeds/README.md`.
+
 ## Overview
 
 ICN (Information-Centric Networking) over RNS (Reticulum Network Stack) operates as a content-addressable, name-based protocol on top of RNS's mesh transport. This document captures the production architecture, mesh constraints, and solutions developed for running ICN over the public RNS mesh (MichMesh, First Tula, UTN Oregon, ShadowLink).
@@ -84,10 +92,8 @@ ICN link establishment **requires** peer's public key from announce table for li
    - Identity hash: `b953bdc81db633de8d89e0207a220723`
    - ICN destination: `24cb54c7ec86294f0723e1d04015b8aa`
 
-2. **Client** copies identity file once:
-   ```bash
-   scp root@172.81.133.81:/etc/rns-icn/identity /Users/niklaswoj/rns-icn/server_identity
-   ```
+2. **Client** copied the server's identity file once (no longer done; see the
+   note at the top).
 
 3. **Client injects at runtime** (`rns_server.py:connect()`):
    ```python
@@ -192,7 +198,7 @@ Example:
 
 **Deployment:**
 ```bash
-# On VPS (172.81.133.81)
+# On VPS (<old-vps>)
 systemctl restart icn-server.service
 # Binary: /root/sc-tools/target/release/forex (not used for ICN)
 # Python: /opt/rns-icn-venv/bin/python3 /opt/rns-icn/icn_server.py
@@ -261,7 +267,7 @@ vim /opt/rns-icn/icn_server.py
 # ("newfile", b"New content here"),
 
 # 2. Restart server
-ssh root@172.81.133.81 "systemctl restart icn-server.service"
+ssh <old-vps> "systemctl restart icn-server.service"
 
 # 3. Wait ~30s for announce, then fetch
 export RNS_DEST=24cb54c7ec86294f0723e1d04015b8aa
@@ -285,7 +291,7 @@ python3 icn_client.py
 ## Network Topology
 
 ```
-Local (macOS)                          VPS (172.81.133.81)
+Local (macOS)                          VPS (<old-vps>)
 ┌─────────────────────┐                ┌─────────────────────┐
 │ RNS Config          │                │ icn-server.service  │
 │ - MichMesh:7822     │                │ - Identity: b953... │

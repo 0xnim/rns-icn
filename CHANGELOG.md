@@ -42,6 +42,8 @@ based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- Tested against Reticulum 1.6.0 (lock file updated from 1.3.7).
+
 - Pages list only the latest edition of each collection, with a link to an
   archive page of the rest. A producer's optional `site.json` titles, orders
   and hides collections. Every page ends with a "What is this?" link and where
@@ -77,6 +79,9 @@ based on [Keep a Changelog](https://keepachangelog.com/).
   destination default, so path responses carry it.
 
 ### Fixed
+
+- A next hop whose link died raised out of the forwarder instead of letting the
+  Interest fall through to a backup route.
 
 - `LinkPool` tore down links that had not been requested from the pool for
   120 s even while they carried traffic, killing a router's upstream link

@@ -2,6 +2,7 @@
 import asyncio
 
 import pytest
+
 from rns_icn.face import TestFace
 from rns_icn.forwarder import Forwarder
 from rns_icn.name import Name
@@ -64,8 +65,22 @@ async def test_cancelled_owner_does_not_block_same_name_successor():
 async def test_send_failure_releases_pending_state():
     fw, face, name = setup()
     face.mode = "error"
-    with pytest.raises(ConnectionError, match="send failed"):
-        await fw.express(Interest(name, lifetime_ms=50), 100)
+    assert await fw.express(Interest(name, lifetime_ms=50), 100) is None
+    assert len(fw.pit) == 0 and fw._pit_notifiers == {}
+
+
+@pytest.mark.asyncio
+async def test_send_failure_on_primary_falls_through_to_backup():
+    # A primary whose link died raises on send; the backup must still be tried.
+    fw, primary, name = setup()
+    primary.mode = "error"
+    backup = ControlledFace(fw)
+    backup._id = 8
+    backup.mode = "inline"
+    fw.register_face(backup)
+    fw.add_route(name, backup.id(), cost=20)
+    result = await fw.express(Interest(name, lifetime_ms=100), 100)
+    assert result is not None and result.content == b"immediate"
     assert len(fw.pit) == 0 and fw._pit_notifiers == {}
 
 
