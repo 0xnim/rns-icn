@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh the space weather feed hourly
+
+[Timer]
+OnBootSec=2min
+OnCalendar=*:07
+RandomizedDelaySec=120
+Persistent=true
+
+[Install]
+WantedBy=timers.target

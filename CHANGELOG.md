@@ -28,6 +28,8 @@ based on [Keep a Changelog](https://keepachangelog.com/).
   the same way.
 - **Publish directory** (`rns_icn.publish_dir`, `publish_dir`): files under a
   directory are published as this node's content and kept in step with it.
+- **Space weather feed** (`feeds/spaceweather.py`): writes NOAA SWPC conditions,
+  forecasts and alerts into a publish directory, with a systemd timer.
 - **Benchmark** (`bench/run.py`): ICN through a hub vs a NomadNet-style page
   fetch over rate-limited links between real Reticulum instances, with bytes
   per link and an optional per-packet trace.
