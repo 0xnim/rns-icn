@@ -108,3 +108,18 @@ def test_server_uses_request_binding_only_on_links_it_opened(monkeypatch):
 
     advertised[HUB_A] = b"icn\x00"  # peer predates the binding
     assert ICNServer._request_path_for(outbound) is None
+
+
+def test_producer_key_record_certifies_itself():
+    import RNS
+
+    from rns_icn import discovery
+
+    identity = RNS.Identity()
+    public_key = identity.get_public_key()
+    assert discovery.key_name(identity.hash).components[1] == b"\x00k"
+    assert discovery.is_reserved(discovery.key_name(identity.hash))
+    assert discovery.key_matches(identity.hash, public_key)
+    assert not discovery.key_matches(identity.hash, RNS.Identity().get_public_key())
+    assert not discovery.key_matches(identity.hash, public_key[:-1])
+    assert not discovery.key_matches(b"\x00" * 16, public_key)

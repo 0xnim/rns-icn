@@ -18,11 +18,17 @@ Application labels MUST NOT start with ``0x00``.
 
 from __future__ import annotations
 
-from .name import Name
+import hashlib
+
+from .name import RNS_ADDR_BYTES, Name
 
 # Reserved name components (see module docstring).
 META_LABEL = b"\x00m"      # latest-version pointer for a collection prefix
 CATALOG_LABEL = b"\x00c"   # signed namespace catalog (the manifest)
+KEY_LABEL = b"\x00k"       # the producer's public key (self-certifying)
+
+# An RNS identity's public key: X25519 then Ed25519, 32 bytes each.
+PUBLIC_KEY_BYTES = 64
 
 # Meta payload framing: [fmt:1][target Name.to_bytes()].
 _META_FMT = 0x01
@@ -40,6 +46,23 @@ def meta_name(prefix: Name) -> Name:
 def catalog_name(prefix: Name) -> Name:
     """The reserved name carrying ``prefix``'s signed namespace catalog."""
     return Name(prefix.rns_addr, [*prefix.components[1:], CATALOG_LABEL])
+
+
+def key_name(producer: bytes) -> Name:
+    """The reserved name carrying ``producer``'s public key."""
+    return Name(producer, [KEY_LABEL])
+
+
+def key_matches(producer: bytes, public_key: bytes) -> bool:
+    """Whether ``public_key`` is the key ``producer``'s address was derived from.
+
+    A producer address is the first 16 bytes of the SHA-256 of its public key,
+    so the key certifies itself: no signature and no trust in whoever served it.
+    """
+    return (
+        len(public_key) == PUBLIC_KEY_BYTES
+        and hashlib.sha256(public_key).digest()[:RNS_ADDR_BYTES] == producer
+    )
 
 
 def is_reserved(name: Name) -> bool:

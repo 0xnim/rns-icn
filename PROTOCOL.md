@@ -810,6 +810,7 @@ These labels under a producer's namespace have defined meaning:
 | `/<producer>/manifest` | Content manifest, JSON ([§15](#15-manifests)) | producer-signed Data |
 | `/<producer>/health` | Health/status JSON | unsigned Data |
 | `/<collection>/<0x00 'm'>` | Latest-version pointer (below) | producer-signed Data |
+| `/<producer>/<0x00 'k'>` | Producer's public key ([§14.2](#142-producer-key)) | unsigned, self-certifying |
 
 Any label whose **first byte is `0x00`** is protocol-reserved; application
 labels **MUST NOT** begin with `0x00`. Producers **SHOULD NOT** publish ordinary
@@ -836,6 +837,20 @@ A consumer resolves the authenticated latest by:
 This makes "latest" a producer assertion rather than a cache's unverifiable
 ranking. It is a pure naming/convention layer over signed Data — **no
 protocol-version change**.
+
+### 14.2 Producer key
+
+A consumer that has never received a producer's Reticulum announce has no key
+to verify its Data with, and cannot ask for one if the producer is offline.
+Any node that knows a producer's identity **SHOULD** therefore answer an
+Interest for `/<producer>/<0x00 'k'>` with a Data whose content is the
+producer's 64-byte Reticulum public key (X25519 key, then Ed25519 key).
+
+The record is unsigned because it certifies itself: a consumer **MUST** check
+that the first 16 bytes of `SHA-256(content)` equal the producer address in the
+name, and **MUST** discard the record otherwise. The node that served it is not
+trusted. The key never changes for a given address, so the record may be cached
+indefinitely.
 
 ---
 

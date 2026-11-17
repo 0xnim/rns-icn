@@ -254,6 +254,7 @@ class _ClientForPolicy:
     _check_rollback = _C._check_rollback
     _maybe_decrypt = _C._maybe_decrypt
     _producer_validators = _C._producer_validators
+    _producer_identity = _C._producer_identity
     identity = _C.identity  # property, for _maybe_decrypt
 
 

@@ -72,6 +72,8 @@ class ICNClient:
         # Nodes heard announcing that they hold a producer's content.
         self.holders = HolderDirectory(hops_to=_hops_to)
         self._announce_handler: _HolderAnnounceHandler | None = None
+        # producer address -> identity built from a fetched key record.
+        self._producer_keys: dict[bytes, RNS.Identity] = {}
         # name → highest authenticated (signed_at, sequence) accepted so far,
         # used for rollback detection when config.reject_rollback is set.
         self._seen_signed_key: dict[bytes, tuple[int, int]] = {}
@@ -284,6 +286,11 @@ class ICNClient:
                             "Data does not match the requested content-hash pin"
                         )
                         continue
+                    if (
+                        result.signature is not None
+                        and self._producer_identity(result.name.rns_addr) is None
+                    ):
+                        await self._learn_producer_key(result.name.rns_addr, face_id, timeout)
                     sig_ok, sig_err = self._check_signature(
                         result, require_signature=require_signature
                     )
@@ -539,9 +546,7 @@ class ICNClient:
         if data.signature is not None:
             # The producer address in a name is the producer's *identity* hash
             # (not a destination hash), so recall accordingly.
-            identity = RNS.Identity.recall(
-                data.name.rns_addr, from_identity_hash=True
-            )
+            identity = self._producer_identity(data.name.rns_addr)
             if identity is not None:
                 if data.verify_signature(identity.validate):
                     return True, None
@@ -589,10 +594,44 @@ class ICNClient:
         so the authorized key is recalled directly from the mesh. Returns None
         when the identity is not available (offline / never announced).
         """
-        identity = RNS.Identity.recall(producer_addr, from_identity_hash=True)
+        identity = self._producer_identity(producer_addr)
         if identity is not None:
             return [identity.validate]
         return None
+
+    def _producer_identity(self, producer_addr: bytes) -> RNS.Identity | None:
+        """The producer's identity: heard on the mesh, or fetched as a key record."""
+        identity = RNS.Identity.recall(producer_addr, from_identity_hash=True)
+        if identity is not None:
+            return identity
+        # getattr: some callers build a bare client without __init__.
+        return getattr(self, "_producer_keys", {}).get(producer_addr)
+
+    async def _learn_producer_key(
+        self, producer_addr: bytes, face_id: FaceId, timeout: float
+    ) -> bool:
+        """Fetch a producer's public key from the node that served its content.
+
+        Lets a reader who has never heard the producer announce (it may be
+        offline) verify what a cache hands over. The key certifies itself
+        against the address (``discovery.key_matches``), so the serving node
+        is not trusted.
+        """
+        if self._forwarder is None:
+            return False
+        interest = Interest(name=discovery.key_name(producer_addr))
+        interest.with_lifetime(int(timeout * 1000))
+        interest.nonce = os.urandom(8)
+        try:
+            data = await asyncio.wait_for(self._forwarder.express(interest, face_id), timeout)
+        except Exception:
+            return False
+        if data is None or not discovery.key_matches(producer_addr, data.content):
+            return False
+        identity = RNS.Identity(create_keys=False)
+        identity.load_public_key(data.content)
+        self._producer_keys[producer_addr] = identity
+        return True
 
     def _maybe_decrypt(self, data: Data) -> Data:
         """Decrypt restricted Data in place if we hold a capability for it.

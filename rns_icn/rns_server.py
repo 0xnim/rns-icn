@@ -245,7 +245,21 @@ class ICNServer(BaseICNServer):
                 return Data.new(
                     name=interest.name, content=json.dumps(health).encode("utf-8")
                 )
+        if (
+            interest.name.len() == 2
+            and interest.name.components[1] == discovery.KEY_LABEL
+        ):
+            key = self._public_key_of(interest.name.rns_addr)
+            if key is not None:
+                return Data.new(name=interest.name, content=key)
         return await super().resolve(interest, in_face)
+
+    def _public_key_of(self, producer_addr: bytes) -> bytes | None:
+        """A producer's public key, if this node knows it (PROTOCOL.md §14.2)."""
+        if producer_addr == self.rns_addr and self.identity is not None:
+            return self.identity.get_public_key()
+        identity = RNS.Identity.recall(producer_addr, from_identity_hash=True)
+        return identity.get_public_key() if identity is not None else None
 
     def _serve_request(self, path, data, request_id, link_id, remote_identity, requested_at):
         """Request binding (PROTOCOL.md §3): an Interest in, Data or a NACK out.

@@ -32,6 +32,10 @@ based on [Keep a Changelog](https://keepachangelog.com/).
 - **Space weather feed** (`feeds/spaceweather.py`): writes NOAA SWPC conditions
   (a compact JSON record and a page), forecasts and alerts into a publish
   directory as collections under `swx/`, with a systemd timer.
+- **Producer key record** (PROTOCOL.md §14.2): any node that knows a producer
+  answers `/<producer>/<0x00 k>` with its public key, which certifies itself
+  against the address. A client that has never heard the producer announce can
+  now verify content served by a cache while the producer is offline.
 - **Benchmark** (`bench/run.py`): ICN through a hub vs a NomadNet-style page
   fetch over rate-limited links between real Reticulum instances, with bytes
   per link and an optional per-packet trace.
