@@ -151,10 +151,11 @@ def _start_pages(server: ICNServer, config) -> asyncio.Task | None:
 
     nicknames: dict[bytes, str] = {}
     for peer in config.known_peers:
-        if peer.identity_path:
+        identity = RNS.Identity.recall(bytes.fromhex(peer.destination_hash))
+        if identity is None and peer.identity_path:
             identity = RNS.Identity.from_file(peer.identity_path)
-            if identity is not None:
-                nicknames[identity.hash] = peer.name
+        if identity is not None:
+            nicknames[identity.hash] = peer.name
     node = PageNode(server, node_name=config.pages_node_name, nicknames=nicknames)
     print(f"  Pages: {node.hexhash} (NomadNet page node \"{config.pages_node_name}\")")
 
@@ -190,7 +191,7 @@ async def _install_peer_route(server: ICNServer, peer) -> tuple[str, Name] | Non
     is authoritative to that peer, so the route is keyed by the peer's identity
     hash pointing at the Link face. ``connect()`` uses the RNS *destination*
     hash while the FIB prefix is the *identity* hash — they differ, so the
-    peer's ``identity_path`` is required to derive the routable prefix.
+    prefix is derived from the peer's identity as learned from its announce.
 
     Idempotent: ``connect`` reuses an existing link via the LinkPool and
     ``add_route`` upserts, so this is safe to call again on reconnect.
@@ -202,13 +203,15 @@ async def _install_peer_route(server: ICNServer, peer) -> tuple[str, Name] | Non
         print(f"  ! Could not link to peer '{peer.name}' ({peer.destination_hash[:16]})",
               file=sys.stderr)
         return None
-    if not peer.identity_path:
-        print(f"  ! Peer '{peer.name}' has no identity_path; cannot install route",
-              file=sys.stderr)
-        return None
-    identity = RNS.Identity.from_file(peer.identity_path)
+    # The peer's public identity came with its announce, and the link just
+    # made proves the destination belongs to it. An identity file is only a
+    # fallback: it holds the peer's private key, which a follower has no
+    # business having.
+    identity = RNS.Identity.recall(bytes.fromhex(peer.destination_hash))
+    if identity is None and peer.identity_path:
+        identity = RNS.Identity.from_file(peer.identity_path)
     if identity is None:
-        print(f"  ! Could not load identity for peer '{peer.name}' from {peer.identity_path}",
+        print(f"  ! Identity of peer '{peer.name}' is not known; cannot install route",
               file=sys.stderr)
         return None
     prefix = Name(identity.hash)
@@ -234,7 +237,7 @@ def _start_follow(server: ICNServer, peer, identity, face_id: int) -> None:
     ).hex()
     if expected != peer.destination_hash.lower():
         print(f"  ! Not following '{peer.name}': destination_hash does not belong "
-              f"to the identity in {peer.identity_path}", file=sys.stderr)
+              f"to the peer's identity", file=sys.stderr)
         return
     server.follower.follow(
         face_id,
@@ -287,6 +290,56 @@ def _wire_route_reinstall(server: ICNServer, config) -> None:
             asyncio.run_coroutine_threadsafe(_run(), server._loop)
 
     server.discovery.add_callback(_on_rediscovered)
+
+
+RECONNECT_FIRST_DELAY = 15.0
+RECONNECT_MAX_DELAY = 600.0
+
+
+def _peer_is_routed(server: ICNServer, peer) -> bool:
+    import RNS
+    identity = RNS.Identity.recall(bytes.fromhex(peer.destination_hash))
+    return identity is not None and bool(server.forwarder.fib.lookup(Name(identity.hash)))
+
+
+def _keep_peers_connected(server: ICNServer, config, check_interval: float = 5.0) -> asyncio.Task:
+    """Retry links to known peers that are down, backing off from 15 s to 10 min.
+
+    Announces alone are not a dependable reconnect signal: transport nodes
+    rate-limit them, so a peer that came back may not be heard from for a long
+    time. A link attempt asks the network for a path itself.
+    """
+    async def _loop() -> None:
+        delay = {p.destination_hash: RECONNECT_FIRST_DELAY for p in config.known_peers}
+        due = {p.destination_hash: 0.0 for p in config.known_peers}
+        while True:
+            await asyncio.sleep(check_interval)
+            now = asyncio.get_running_loop().time()
+            for peer in config.known_peers:
+                key = peer.destination_hash
+                if _peer_is_routed(server, peer):
+                    delay[key] = RECONNECT_FIRST_DELAY
+                    due[key] = 0.0
+                    continue
+                if due[key] == 0.0:
+                    due[key] = now + delay[key]     # just went down: wait once
+                    continue
+                if now < due[key]:
+                    continue
+                try:
+                    result = await _install_peer_route(server, peer)
+                except Exception as e:
+                    print(f"  ! Reconnect to '{peer.name}' failed: {e}", file=sys.stderr)
+                    result = None
+                if result is not None:
+                    print(f"  Reconnect: re-installed route for {peer.name}")
+                    delay[key] = RECONNECT_FIRST_DELAY
+                    due[key] = 0.0
+                else:
+                    delay[key] = min(delay[key] * 2, RECONNECT_MAX_DELAY)
+                    due[key] = asyncio.get_running_loop().time() + delay[key]
+
+    return asyncio.ensure_future(_loop())
 
 
 def _wire_holder_routes(server: ICNServer) -> None:
@@ -375,6 +428,7 @@ async def router_main() -> int:
         installed = await _install_peer_routes(server, config)
         # Withdraw routes on link drop and re-install on the peer's next announce.
         _wire_route_reinstall(server, config)
+        _reconnect_task = _keep_peers_connected(server, config)
         if config.route_via_holders:
             _wire_holder_routes(server)
         # Held (not directly used) so the announce loop is not garbage-collected.

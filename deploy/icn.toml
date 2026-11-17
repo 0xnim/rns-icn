@@ -16,7 +16,7 @@ aspect = "default"
 rns_configdir = "/etc/rnsd"
 
 role = "ORIGIN"
-announce_interval = 30.0
+announce_interval = 1800.0          # public transport nodes rate-limit frequent announces
 reannounce_on_link = true
 
 cs_max_entries = 10000

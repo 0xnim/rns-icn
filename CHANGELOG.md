@@ -38,6 +38,17 @@ based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- A router retries links to known peers that are down, backing off from 15
+  seconds to 10 minutes, instead of waiting to hear the peer announce.
+- Config paths beginning with `~` resolve to the home directory; they were
+  being placed under the config file's directory.
+- The link pool asks for a path before it needs the peer's identity, so a peer
+  not heard from yet can still be linked.
+
+- A router no longer needs a followed or upstream peer's identity file (its
+  private key). The peer's public identity is taken from its announce;
+  `identity_path` on a known peer is now only a fallback.
+
 - The page front end groups items by folder, marks the latest edition of each,
   and opens on the node's own content before listing other producers.
 

@@ -186,13 +186,15 @@ class LinkPool:
 
     async def _create_link(self, peer_hash: bytes) -> RNS.Link | None:
         """Resolve identity + path, then establish an outbound Link to the peer."""
-        identity = self._resolve_identity(peer_hash)
-        if identity is None:
-            RNS.log(f"ICN LinkPool: no identity for peer {peer_hash.hex()[:16]}", RNS.LOG_DEBUG)
+        # Path first: the answer to a path request is the peer's announce, which
+        # is also where its identity comes from when none is configured.
+        if not await self._ensure_path(peer_hash):
+            RNS.log(f"ICN LinkPool: no path to peer {peer_hash.hex()[:16]}", RNS.LOG_NOTICE)
             return None
 
-        if not await self._ensure_path(peer_hash):
-            RNS.log(f"ICN LinkPool: no path to peer {peer_hash.hex()[:16]}", RNS.LOG_DEBUG)
+        identity = self._resolve_identity(peer_hash)
+        if identity is None:
+            RNS.log(f"ICN LinkPool: no identity for peer {peer_hash.hex()[:16]}", RNS.LOG_NOTICE)
             return None
 
         dest = RNS.Destination(

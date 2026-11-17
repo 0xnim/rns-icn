@@ -23,7 +23,7 @@ class KnownPeer:
     identity_path: str | None = None
     aliases: list[str] = field(default_factory=list)
     # Router only: keep this peer's content in the local cache ahead of demand
-    # (rns_icn.follow). Requires identity_path. follow_labels restricts the
+    # (rns_icn.follow). follow_labels restricts the
     # follow to those top-level labels; empty = the whole namespace.
     follow: bool = False
     follow_labels: list[str] = field(default_factory=list)
@@ -101,7 +101,7 @@ class ServerConfig:
     # restricted prefixes at publish and issues capabilities to the listed
     # consumers. Empty = everything public (no encryption).
     access_rules: list[AccessRuleConfig] = field(default_factory=list)
-    announce_interval: float = 30.0
+    announce_interval: float = 1800.0
     reannounce_on_link: bool = True
     cs_max_entries: int = 10000
     cs_ttl_seconds: int | None = None
@@ -160,6 +160,13 @@ def load_server_config(path: str = "icn.toml") -> ServerConfig:
     return _dict_to_server_config(data, path)
 
 
+def _resolve_path(base_dir: Path, value: str) -> Path:
+    """A config path: ``~`` is the home directory, and a relative path is
+    relative to the config file. (Joining first would bury the ``~``.)"""
+    path = Path(value).expanduser()
+    return path if path.is_absolute() else base_dir / path
+
+
 def _load_toml(path: str) -> dict[str, Any]:
     """Load and parse TOML file."""
     p = Path(path).expanduser()
@@ -177,7 +184,7 @@ def _dict_to_client_config(data: dict[str, Any], base_path: str) -> ClientConfig
     for kp in data.get("known_peers", []):
         identity_path = kp.get("identity_path")
         if identity_path:
-            identity_path = str((base_dir / identity_path).expanduser())
+            identity_path = str(_resolve_path(base_dir, identity_path))
         known_peers.append(
             KnownPeer(
                 name=kp["name"],
@@ -189,7 +196,7 @@ def _dict_to_client_config(data: dict[str, Any], base_path: str) -> ClientConfig
 
     identity_path = data.get("identity_path")
     if identity_path:
-        identity_path = str((base_dir / identity_path).expanduser())
+        identity_path = str(_resolve_path(base_dir, identity_path))
 
     return ClientConfig(
         identity_path=identity_path,
@@ -205,7 +212,7 @@ def _dict_to_client_config(data: dict[str, Any], base_path: str) -> ClientConfig
         reject_rollback=data.get("reject_rollback", False),
         use_request_binding=data.get("use_request_binding", True),
         capabilities=[
-            str((base_dir / p).expanduser()) for p in data.get("capabilities", [])
+            str(_resolve_path(base_dir, p)) for p in data.get("capabilities", [])
         ],
         log_level=data.get("log_level", "INFO"),
         log_json=data.get("log_json", False),
@@ -220,7 +227,7 @@ def _dict_to_server_config(data: dict[str, Any], base_path: str) -> ServerConfig
     for kp in data.get("known_peers", []):
         identity_path = kp.get("identity_path")
         if identity_path:
-            identity_path = str((base_dir / identity_path).expanduser())
+            identity_path = str(_resolve_path(base_dir, identity_path))
         known_peers.append(
             KnownPeer(
                 name=kp["name"],
@@ -232,7 +239,7 @@ def _dict_to_server_config(data: dict[str, Any], base_path: str) -> ServerConfig
             )
         )
 
-    identity_path = str((base_dir / data["identity_path"]).expanduser())
+    identity_path = str(_resolve_path(base_dir, data["identity_path"]))
 
     role_name = data.get("role", "ORIGIN")
     role_map = {
@@ -262,11 +269,11 @@ def _dict_to_server_config(data: dict[str, Any], base_path: str) -> ServerConfig
         mesh_interfaces=data.get("mesh_interfaces", ["UTN Oregon"]),
         role=role,
         access_rules=access_rules,
-        announce_interval=data.get("announce_interval", 30.0),
+        announce_interval=data.get("announce_interval", 1800.0),
         reannounce_on_link=data.get("reannounce_on_link", True),
         cs_max_entries=data.get("cs_max_entries", 10000),
         cs_ttl_seconds=data.get("cs_ttl_seconds"),
-        cs_path=str((base_dir / data.get("cs_path", "~/.icn/content_store.db")).expanduser()),
+        cs_path=str(_resolve_path(base_dir, data.get("cs_path", "~/.icn/content_store.db"))),
         cs_prefix_ttls=data.get("cs_prefix_ttls", {}),
         cs_stale_while_revalidate=data.get("cs_stale_while_revalidate", 0),
         meta_freshness_period=data.get("meta_freshness_period", 15),
@@ -277,7 +284,7 @@ def _dict_to_server_config(data: dict[str, Any], base_path: str) -> ServerConfig
         follow_resync_interval=float(data.get("follow_resync_interval", 0.0)),
         route_via_holders=bool(data.get("route_via_holders", False)),
         publish_dir=(
-            str((base_dir / data["publish_dir"]).expanduser())
+            str(_resolve_path(base_dir, data["publish_dir"]))
             if data.get("publish_dir") else None
         ),
         publish_dir_interval=float(data.get("publish_dir_interval", 30.0)),

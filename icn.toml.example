@@ -10,11 +10,11 @@ mesh_interfaces = ["UTN Oregon"]
 
 # Known ICN servers to connect to
 # destination_hash = 32-char hex RNS destination hash
-# identity_path = optional pre-shared identity file for announce injection
+# identity_path = optional and rarely wanted: an identity file holds the peer's
+#   private key. A peer's public identity is learned from its announce.
 [[client.known_peers]]
 name = "vps-prod"
 destination_hash = "24cb54c7ec86294f0723e1d04015b8aa"
-identity_path = "~/.icn/vps_identity"
 
 # Timeouts
 connect_timeout = 60.0
@@ -99,7 +99,6 @@ resource_threshold = 100000  # bytes, ~100KB
 [[server.known_peers]]
 name = "peer-1"
 destination_hash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-identity_path = "~/.icn/peer1_identity"
 
 # Follow (icn-router): keep a peer's content in the local cache before anyone
 # asks for it, so the first reader is served locally and the content stays
@@ -108,7 +107,6 @@ identity_path = "~/.icn/peer1_identity"
 #   [[server.known_peers]]
 #   name = "weather"
 #   destination_hash = "..."
-#   identity_path = "~/.icn/weather_identity"   # required for follow
 #   follow = true
 #   follow_labels = ["feed"]    # optional: only these top-level labels
 #
